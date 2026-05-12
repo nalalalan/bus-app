@@ -1,0 +1,5 @@
+node_modules/
+.env
+_server.log
+_server.err.log
+*.png

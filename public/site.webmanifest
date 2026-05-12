@@ -1,0 +1,15 @@
+{
+  "name": "WRTA Live Bus",
+  "short_name": "WRTA Bus",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f6f2",
+  "theme_color": "#c75d32",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WRTA Live Bus | bus.aolabs.io</title>
+    <meta name="description" content="Stable WRTA live bus screen for exact stop, leave, board, pull-cord, and get-off timing.">
+    <link rel="canonical" href="https://bus.aolabs.io/">
+    <meta property="og:title" content="WRTA live bus">
+    <meta property="og:description" content="One stable live screen for WRTA bus timing, stop choice, vehicle position, and pull-cord timing.">
+    <meta property="og:url" content="https://bus.aolabs.io/">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.svg">
+    <link rel="manifest" href="/site.webmanifest">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="ao-link" href="https://aolabs.io/" aria-label="AO Labs">
+        <span class="ao-mark" aria-hidden="true">AO</span>
+      </a>
+      <div class="title-block">
+        <p class="eyebrow">bus.aolabs.io</p>
+        <h1>WRTA live bus</h1>
+      </div>
+      <form class="trip-controls" id="tripControls">
+        <label>
+          <span>Route</span>
+          <input id="routeInput" inputmode="numeric" autocomplete="off" value="31" aria-label="Route">
+        </label>
+        <label>
+          <span>Destination</span>
+          <input id="destinationInput" list="destinationOptions" autocomplete="off" value="Chipotle, Park Ave" aria-label="Destination">
+          <datalist id="destinationOptions">
+            <option value="Chipotle, Park Ave"></option>
+          </datalist>
+        </label>
+      </form>
+    </header>
+
+    <main class="stable-screen">
+      <section class="instruction-band" aria-live="polite">
+        <div>
+          <p class="eyebrow">current instruction</p>
+          <h2 id="instructionText">Use GPS</h2>
+        </div>
+        <p id="instructionDetail" class="instruction-detail">Waiting for current location.</p>
+      </section>
+
+      <section class="facts" aria-label="Trip facts">
+        <div class="fact">
+          <span class="label">Be at stop by</span>
+          <strong id="standByTime">--</strong>
+          <small id="standBySub">fixed clock time</small>
+        </div>
+        <div class="fact">
+          <span class="label">Leave by</span>
+          <strong id="leaveByTime">--</strong>
+          <small id="leaveBySub">latest departure</small>
+        </div>
+        <div class="fact">
+          <span class="label">Stop</span>
+          <strong id="boardingStop">--</strong>
+          <small id="boardingDistance">--</small>
+        </div>
+        <div class="fact">
+          <span class="label">Walk</span>
+          <strong id="walkTime">--</strong>
+          <small id="walkDistance">--</small>
+        </div>
+        <div class="fact">
+          <span class="label">Bus arrives</span>
+          <strong id="busArrival">--</strong>
+          <small id="busArrivalSub">schedule/live source</small>
+        </div>
+        <div class="fact">
+          <span class="label">Bus</span>
+          <strong id="busTarget">--</strong>
+          <small id="busLiveState">--</small>
+        </div>
+        <div class="fact">
+          <span class="label">Pull cord</span>
+          <strong id="pullCord">--</strong>
+          <small id="pullCordSub">--</small>
+        </div>
+        <div class="fact">
+          <span class="label">Get off</span>
+          <strong id="exitStop">--</strong>
+          <small id="exitSub">--</small>
+        </div>
+      </section>
+
+      <section class="map-row">
+        <div class="map-panel">
+          <div id="map" aria-label="Live bus map"></div>
+        </div>
+
+        <aside class="state-panel" aria-label="Current state">
+          <div class="state-line">
+            <span class="label">Location</span>
+            <strong id="locationState">Waiting</strong>
+            <button id="useGps" type="button">Use GPS</button>
+          </div>
+          <div class="state-line">
+            <span class="label">Saved home</span>
+            <strong id="homeState">Not set</strong>
+            <button id="saveHome" type="button">Save here</button>
+          </div>
+          <div class="state-line">
+            <span class="label">Stops remaining</span>
+            <strong id="stopsRemaining">--</strong>
+          </div>
+          <div class="state-line">
+            <span class="label">Route status</span>
+            <strong id="routeStatus">Route ready</strong>
+          </div>
+          <div class="state-line sources">
+            <span class="label">Sources</span>
+            <strong id="sourceState">Checking</strong>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
