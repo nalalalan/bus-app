@@ -20,6 +20,10 @@ const BOARD_GRACE_MS = 60 * 1000;
 const MAX_BOARD_CANDIDATES = 10;
 const MAX_DEPARTURES_PER_STOP = 10;
 const MAX_EXIT_CANDIDATES = 8;
+const MAX_AUTO_ROUTE_CANDIDATES = 4;
+const MAX_AUTO_BOARD_CANDIDATES = 4;
+const MAX_AUTO_EXIT_CANDIDATES = 4;
+const MAX_AUTO_DEPARTURES_PER_STOP = 5;
 
 const destinations = {
   chipotle: {
@@ -124,6 +128,24 @@ async function memo(key, ttlMs, loader) {
   const value = await loader();
   cache.set(key, { savedAt: now, value });
   return value;
+}
+
+async function mapLimit(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = { ok: true, value: await mapper(items[index], index) };
+      } catch (error) {
+        results[index] = { ok: false, error };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 async function fetchJson(url, { headers = {}, timeoutMs = 12000 } = {}) {
@@ -355,21 +377,83 @@ async function getSwivTopo() {
   return swiv("/topo", {}, 30 * 60 * 1000);
 }
 
+async function getWrtaRouteLines() {
+  return memo("wrta-route-lines-v1", 30 * 60 * 1000, async () => {
+    const topo = await getSwivTopo();
+    const lines = topo?.topo?.[0]?.ligne || [];
+    const byRouteId = new Map();
+    for (const line of lines) {
+      const routeId = String(line.nomCommercial || line.mnemo || "").trim();
+      const lineId = Number(line.idLigne);
+      if (!routeId || !Number.isFinite(lineId)) continue;
+      if (!byRouteId.has(routeId)) {
+        byRouteId.set(routeId, {
+          routeId,
+          lineId,
+          shortName: line.nomCommercial || line.mnemo || routeId,
+          longName: line.libCommercial || "",
+          color: line.couleur || "#c75d32"
+        });
+      }
+    }
+    return [...byRouteId.values()];
+  });
+}
+
 async function resolveWrtaLine(routeId) {
   const normalizedRouteId = normalizeRouteId(routeId);
-  const topo = await getSwivTopo();
-  const lines = topo?.topo?.[0]?.ligne || [];
+  const lines = await getWrtaRouteLines();
   const line = lines.find((item) => String(item.nomCommercial || item.mnemo || "").trim() === normalizedRouteId)
-    || lines.find((item) => String(item.mnemo || "").trim() === normalizedRouteId)
-    || lines.find((item) => String(item.libCommercial || "").toLowerCase().includes(normalizedRouteId.toLowerCase()));
+    || lines.find((item) => String(item.routeId || "").trim() === normalizedRouteId)
+    || lines.find((item) => String(item.shortName || "").trim() === normalizedRouteId)
+    || lines.find((item) => String(item.longName || "").toLowerCase().includes(normalizedRouteId.toLowerCase()));
   if (!line) throw new Error(`WRTA line ${normalizedRouteId} unavailable in SWIV topology`);
   return {
     routeId: normalizedRouteId,
-    lineId: Number(line.idLigne),
-    shortName: line.nomCommercial || line.mnemo || normalizedRouteId,
-    longName: line.libCommercial || "",
-    color: line.couleur || "#c75d32"
+    lineId: Number(line.lineId),
+    shortName: line.shortName || normalizedRouteId,
+    longName: line.longName || "",
+    color: line.color || "#c75d32"
   };
+}
+
+async function autoRoutePreviews(origin, destination) {
+  const [topo, lines] = await Promise.all([getSwivTopo(), getWrtaRouteLines()]);
+  const lineById = new Map(lines.map((line) => [Number(line.lineId), line]));
+  const previews = new Map();
+  const stops = topo?.topo?.[0]?.pointArret || [];
+
+  for (const stop of stops) {
+    const lat = Number(stop.localisation?.lat);
+    const lng = Number(stop.localisation?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const point = { lat, lng };
+    const boardMeters = haversineMeters(origin, point);
+    const exitMeters = haversineMeters(destination, point);
+
+    for (const info of stop.infoLigneSwiv || []) {
+      const line = lineById.get(Number(info.idLigne));
+      if (!line) continue;
+      const existing = previews.get(line.routeId) || {
+        routeId: line.routeId,
+        lineId: line.lineId,
+        longName: line.longName,
+        nearestBoardMeters: Infinity,
+        nearestExitMeters: Infinity
+      };
+      existing.nearestBoardMeters = Math.min(existing.nearestBoardMeters, boardMeters);
+      existing.nearestExitMeters = Math.min(existing.nearestExitMeters, exitMeters);
+      previews.set(line.routeId, existing);
+    }
+  }
+
+  return [...previews.values()]
+    .filter((preview) => Number.isFinite(preview.nearestBoardMeters) && Number.isFinite(preview.nearestExitMeters))
+    .map((preview) => ({
+      ...preview,
+      directWalkMeters: preview.nearestBoardMeters + preview.nearestExitMeters
+    }))
+    .sort((a, b) => a.directWalkMeters - b.directWalkMeters);
 }
 
 async function getSwivRouteStopMap(routeId, lineId) {
@@ -620,6 +704,52 @@ function tripChoices(plans) {
   });
 }
 
+function totalWalkingMeters(plan) {
+  return Number(plan?.walking?.toBoard?.distanceMeters || 0)
+    + Number(plan?.walking?.fromExit?.distanceMeters || 0);
+}
+
+function journeyOptionKey(plan) {
+  return [
+    plan.route.id,
+    plan.route.directionId,
+    plan.route.headsign,
+    plan.boardingStop.id,
+    plan.exitStop.id
+  ].join("|");
+}
+
+function leastWalkingTripChoices(plans) {
+  const available = plans.filter((plan) => plan.status !== "miss");
+  const pool = available.length ? available : plans;
+  const groups = new Map();
+  for (const plan of pool) {
+    const key = journeyOptionKey(plan);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(plan);
+  }
+
+  const ranked = [...groups.values()]
+    .map((group) => {
+      const choices = tripChoices(group);
+      const first = choices.find((plan) => plan.status !== "miss") || choices[0] || group[0];
+      return {
+        choices,
+        walkingMeters: totalWalkingMeters(first),
+        firstArrivalMs: first?.timings?.busArrivalMs || Infinity,
+        score: first?.score || Infinity
+      };
+    })
+    .filter((item) => item.choices.length)
+    .sort((a, b) => {
+      return a.walkingMeters - b.walkingMeters
+        || a.firstArrivalMs - b.firstArrivalMs
+        || a.score - b.score;
+    });
+
+  return ranked[0]?.choices || [];
+}
+
 function selectedChoiceIndex(choices, choiceOffset = 0, targetArrivalMs = NaN) {
   if (!choices.length) return -1;
   let base = 0;
@@ -630,154 +760,209 @@ function selectedChoiceIndex(choices, choiceOffset = 0, targetArrivalMs = NaN) {
   return clamp(base + Math.trunc(Number(choiceOffset) || 0), 0, choices.length - 1);
 }
 
+async function routeCandidatesForPlan(origin, destination, routeId) {
+  const explicitRouteId = String(routeId || "").trim();
+  if (explicitRouteId) {
+    const route = await getRouteData(explicitRouteId);
+    return {
+      auto: false,
+      previews: [{ routeId: route.routeId, directWalkMeters: null }],
+      routes: [{ route, preview: null }]
+    };
+  }
+
+  const previews = await autoRoutePreviews(origin, destination);
+  const routeResults = await mapLimit(
+    previews.slice(0, MAX_AUTO_ROUTE_CANDIDATES),
+    4,
+    async (preview) => ({
+      preview,
+      route: await getRouteData(preview.routeId)
+    })
+  );
+
+  return {
+    auto: true,
+    previews,
+    routes: routeResults
+      .filter((result) => result.ok && result.value?.route)
+      .map((result) => result.value)
+  };
+}
+
 async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now(), routeId = "", customDestination = null, options = {}) {
   const destination = resolveDestination(destinationId, customDestination);
-  const selectedRouteId = normalizeRouteId(routeId || destination.defaultRouteId || DEFAULT_ROUTE_ID);
-  const route = await getRouteData(selectedRouteId);
-  const live = await getLiveVehicles(route.routeId, route.lineId);
+  const routeSelection = await routeCandidatesForPlan(origin, destination, routeId);
   const sources = [
-    sourceStatus(`Ride Guide route ${route.routeId} schedule`, true),
-    live.status
+    sourceStatus("WRTA route selection", routeSelection.routes.length > 0, {
+      mode: routeSelection.auto ? "least walking" : "fixed route",
+      routesChecked: routeSelection.auto ? routeSelection.previews.length : routeSelection.routes.length,
+      routeCandidates: routeSelection.routes.map((item) => item.route.routeId)
+    })
   ];
-
-  const stopById = route.stopById;
-  const candidateStops = route.stops
-    .map((stop) => ({ stop, directMeters: haversineMeters(origin, stop) }))
-    .filter((item) => Number.isFinite(item.directMeters))
-    .sort((a, b) => a.directMeters - b.directMeters)
-    .slice(0, MAX_BOARD_CANDIDATES);
-
-  const exitCandidates = route.stops
-    .map((stop) => ({ stop, directMeters: haversineMeters(destination, stop) }))
-    .sort((a, b) => a.directMeters - b.directMeters)
-    .slice(0, MAX_EXIT_CANDIDATES);
 
   const today = localDateString(nowMs);
   const tomorrow = addDays(today, 1);
   const possiblePlans = [];
+  let boardCandidateCount = 0;
+  let exitCandidateCount = 0;
+  const boardLimit = routeSelection.auto ? MAX_AUTO_BOARD_CANDIDATES : MAX_BOARD_CANDIDATES;
+  const exitLimit = routeSelection.auto ? MAX_AUTO_EXIT_CANDIDATES : MAX_EXIT_CANDIDATES;
+  const departureLimit = routeSelection.auto ? MAX_AUTO_DEPARTURES_PER_STOP : MAX_DEPARTURES_PER_STOP;
 
-  for (const boardCandidate of candidateStops) {
-    const boardStop = boardCandidate.stop;
-    const walkToBoard = await walkingRoute(origin, boardStop);
-    const walkSeconds = walkToBoard.durationSeconds;
-    const departureDates = [today, tomorrow];
-    const departures = [];
-    for (const serviceDate of departureDates) {
-      try {
-        const rows = await getDepartures(boardStop.id, serviceDate);
-        for (const row of rows || []) {
-          if (row.routeId === route.routeId) departures.push(row);
+  for (const { route } of routeSelection.routes) {
+    const stopById = route.stopById;
+    const candidateStops = route.stops
+      .map((stop) => ({ stop, directMeters: haversineMeters(origin, stop) }))
+      .filter((item) => Number.isFinite(item.directMeters))
+      .sort((a, b) => a.directMeters - b.directMeters)
+      .slice(0, boardLimit);
+
+    const exitCandidates = route.stops
+      .map((stop) => ({ stop, directMeters: haversineMeters(destination, stop) }))
+      .filter((item) => Number.isFinite(item.directMeters))
+      .sort((a, b) => a.directMeters - b.directMeters)
+      .slice(0, exitLimit);
+
+    boardCandidateCount += candidateStops.length;
+    exitCandidateCount += exitCandidates.length;
+
+    for (const boardCandidate of candidateStops) {
+      const boardStop = boardCandidate.stop;
+      const walkToBoard = await walkingRoute(origin, boardStop);
+      const walkSeconds = walkToBoard.durationSeconds;
+      const departureDates = [today, tomorrow];
+      const departures = [];
+      for (const serviceDate of departureDates) {
+        try {
+          const rows = await getDepartures(boardStop.id, serviceDate);
+          for (const row of rows || []) {
+            if (row.routeId === route.routeId) departures.push(row);
+          }
+        } catch {
+          sources.push(sourceStatus(`Ride Guide departures ${boardStop.code}`, false));
         }
-      } catch {
-        sources.push(sourceStatus(`Ride Guide departures ${boardStop.code}`, false));
+      }
+
+      const usableDepartures = departures
+        .map((row) => ({ ...row, departureMs: timeStringToMs(row.serviceDate, row.departureTime) }))
+        .filter((row) => row.departureMs >= nowMs - 8 * 60 * 1000)
+        .sort((a, b) => a.departureMs - b.departureMs)
+        .slice(0, departureLimit);
+
+      for (const departure of usableDepartures) {
+        let trip;
+        try {
+          trip = await getTrip(departure.tripId);
+        } catch {
+          continue;
+        }
+        const boardTime = (trip.stopTimes || []).find((stopTime) => stopTime.id === boardStop.id);
+        if (!boardTime) continue;
+        const boardSequence = Number(boardTime.sequence);
+        const boardArrivalMs = timeStringToMs(departure.serviceDate, boardTime.time);
+
+        for (const exitCandidate of exitCandidates) {
+          const exitStop = exitCandidate.stop;
+          const exitTime = (trip.stopTimes || []).find((stopTime) => stopTime.id === exitStop.id);
+          if (!exitTime || Number(exitTime.sequence) <= boardSequence) continue;
+          const exitArrivalMs = timeStringToMs(departure.serviceDate, exitTime.time);
+          const walkFromExit = await walkingRoute(exitStop, destination);
+          const prediction = departure.serviceDate === today
+            ? await stopPredictions(boardStop, trip.headsign, nowMs, boardArrivalMs, route.lineId)
+            : null;
+          const busArrivalMs = prediction?.predictedMs || boardArrivalMs;
+          const standByMs = busArrivalMs - STOP_BUFFER_MS;
+          const leaveByMs = standByMs - walkSeconds * 1000;
+          const status = planState(nowMs, leaveByMs, standByMs, busArrivalMs, walkSeconds);
+          const previousStopTime = (trip.stopTimes || [])
+            .filter((stopTime) => Number(stopTime.sequence) < Number(exitTime.sequence))
+            .sort((a, b) => Number(b.sequence) - Number(a.sequence))[0];
+          const previousStop = previousStopTime ? stopById.get(previousStopTime.id) : null;
+          const previousStopMs = previousStopTime ? timeStringToMs(departure.serviceDate, previousStopTime.time) : null;
+          const earliestPullMs = busArrivalMs + 90 * 1000;
+          const latestPullMs = exitArrivalMs - 2 * 60 * 1000;
+          const scheduledPullMs = previousStopMs && exitArrivalMs - previousStopMs >= 90 * 1000
+            ? previousStopMs + 20 * 1000
+            : exitArrivalMs - 3 * 60 * 1000;
+          const pullCordAtMs = clamp(
+            scheduledPullMs,
+            Math.min(earliestPullMs, latestPullMs),
+            Math.max(earliestPullMs, latestPullMs)
+          );
+          const stopWindow = (trip.stopTimes || [])
+            .filter((stopTime) => Number(stopTime.sequence) >= boardSequence && Number(stopTime.sequence) <= Number(exitTime.sequence))
+            .map((stopTime) => ({
+              id: stopTime.id,
+              sequence: stopTime.sequence,
+              time: stopTime.time,
+              timeMs: timeStringToMs(departure.serviceDate, stopTime.time),
+              stop: compactStop(stopById.get(stopTime.id))
+            }));
+
+          possiblePlans.push({
+            generatedAt: new Date(nowMs).toISOString(),
+            destination,
+            origin,
+            status,
+            route: {
+              id: route.routeId,
+              lineId: route.lineId,
+              headsign: trip.headsign,
+              directionId: trip.directionId,
+              shapeId: trip.shapeId,
+              tripId: trip.id
+            },
+            boardingStop: compactStop(boardStop),
+            exitStop: compactStop(exitStop),
+            previousStop: compactStop(previousStop),
+            timings: {
+              leaveByMs,
+              standByMs,
+              busArrivalMs,
+              scheduledBusArrivalMs: boardArrivalMs,
+              exitArrivalMs,
+              pullCordAtMs,
+              serviceDate: departure.serviceDate
+            },
+            walking: {
+              toBoard: walkToBoard,
+              fromExit: walkFromExit
+            },
+            vehicle: null,
+            stopWindow,
+            stopCount: Math.max(0, Number(exitTime.sequence) - boardSequence),
+            prediction,
+            score: scorePlan({ walkToBoard, walkFromExit, busArrivalMs, nowMs, status, exitStop, destination })
+          });
+        }
       }
     }
 
-    const usableDepartures = departures
-      .map((row) => ({ ...row, departureMs: timeStringToMs(row.serviceDate, row.departureTime) }))
-      .filter((row) => row.departureMs >= nowMs - 8 * 60 * 1000)
-      .sort((a, b) => a.departureMs - b.departureMs)
-      .slice(0, MAX_DEPARTURES_PER_STOP);
-
-    for (const departure of usableDepartures) {
-      let trip;
-      try {
-        trip = await getTrip(departure.tripId);
-      } catch {
-        continue;
-      }
-      const boardTime = (trip.stopTimes || []).find((stopTime) => stopTime.id === boardStop.id);
-      if (!boardTime) continue;
-      const boardSequence = Number(boardTime.sequence);
-      const boardArrivalMs = timeStringToMs(departure.serviceDate, boardTime.time);
-
-      for (const exitCandidate of exitCandidates) {
-        const exitStop = exitCandidate.stop;
-        const exitTime = (trip.stopTimes || []).find((stopTime) => stopTime.id === exitStop.id);
-        if (!exitTime || Number(exitTime.sequence) <= boardSequence) continue;
-        const exitArrivalMs = timeStringToMs(departure.serviceDate, exitTime.time);
-        const walkFromExit = await walkingRoute(exitStop, destination);
-        const prediction = departure.serviceDate === today
-          ? await stopPredictions(boardStop, trip.headsign, nowMs, boardArrivalMs, route.lineId)
-          : null;
-        const busArrivalMs = prediction?.predictedMs || boardArrivalMs;
-        const standByMs = busArrivalMs - STOP_BUFFER_MS;
-        const leaveByMs = standByMs - walkSeconds * 1000;
-        const status = planState(nowMs, leaveByMs, standByMs, busArrivalMs, walkSeconds);
-        const previousStopTime = (trip.stopTimes || [])
-          .filter((stopTime) => Number(stopTime.sequence) < Number(exitTime.sequence))
-          .sort((a, b) => Number(b.sequence) - Number(a.sequence))[0];
-        const previousStop = previousStopTime ? stopById.get(previousStopTime.id) : null;
-        const previousStopMs = previousStopTime ? timeStringToMs(departure.serviceDate, previousStopTime.time) : null;
-        const earliestPullMs = busArrivalMs + 90 * 1000;
-        const latestPullMs = exitArrivalMs - 2 * 60 * 1000;
-        const scheduledPullMs = previousStopMs && exitArrivalMs - previousStopMs >= 90 * 1000
-          ? previousStopMs + 20 * 1000
-          : exitArrivalMs - 3 * 60 * 1000;
-        const pullCordAtMs = clamp(
-          scheduledPullMs,
-          Math.min(earliestPullMs, latestPullMs),
-          Math.max(earliestPullMs, latestPullMs)
-        );
-        const stopWindow = (trip.stopTimes || [])
-          .filter((stopTime) => Number(stopTime.sequence) >= boardSequence && Number(stopTime.sequence) <= Number(exitTime.sequence))
-          .map((stopTime) => ({
-            id: stopTime.id,
-            sequence: stopTime.sequence,
-            time: stopTime.time,
-            timeMs: timeStringToMs(departure.serviceDate, stopTime.time),
-            stop: compactStop(stopById.get(stopTime.id))
-          }));
-
-        const vehicle = matchVehicle(live.vehicles, trip.headsign);
-        const plan = {
-          generatedAt: new Date(nowMs).toISOString(),
-          destination,
-          origin,
-          status,
-          route: {
-            id: route.routeId,
-            lineId: route.lineId,
-            headsign: trip.headsign,
-            directionId: trip.directionId,
-            shapeId: trip.shapeId,
-            tripId: trip.id
-          },
-          boardingStop: compactStop(boardStop),
-          exitStop: compactStop(exitStop),
-          previousStop: compactStop(previousStop),
-          timings: {
-            leaveByMs,
-            standByMs,
-            busArrivalMs,
-            scheduledBusArrivalMs: boardArrivalMs,
-            exitArrivalMs,
-            pullCordAtMs,
-            serviceDate: departure.serviceDate
-          },
-          walking: {
-            toBoard: walkToBoard,
-            fromExit: walkFromExit
-          },
-          vehicle,
-          stopWindow,
-          stopCount: Math.max(0, Number(exitTime.sequence) - boardSequence),
-          prediction,
-          score: scorePlan({ walkToBoard, walkFromExit, busArrivalMs, nowMs, status, exitStop, destination })
-        };
-        possiblePlans.push(plan);
-      }
+    if (routeSelection.auto && possiblePlans.some((plan) => plan.status !== "miss")) {
+      break;
     }
   }
 
   possiblePlans.sort((a, b) => a.score - b.score);
-  const choices = tripChoices(possiblePlans);
+  const choices = routeSelection.auto ? leastWalkingTripChoices(possiblePlans) : tripChoices(possiblePlans);
   const planIndex = selectedChoiceIndex(choices, options.choiceOffset, options.targetArrivalMs);
   const plan = planIndex >= 0 ? choices[planIndex] : null;
+
+  if (plan) {
+    sources.push(sourceStatus(`Ride Guide route ${plan.route.id} schedule`, true));
+    const live = await getLiveVehicles(plan.route.id, plan.route.lineId);
+    plan.vehicle = matchVehicle(live.vehicles, plan.route.headsign);
+    sources.push(live.status);
+  } else {
+    sources.push(sourceStatus("Ride Guide candidate schedules", false, { detail: "no feasible plan" }));
+  }
+
   const walkingOk = plan ? plan.walking.toBoard.sourceOk && plan.walking.fromExit.sourceOk : false;
   sources.push(sourceStatus("OSRM walking", walkingOk, plan ? {
     toBoardSource: plan.walking.toBoard.source,
-    fromExitSource: plan.walking.fromExit.source
+    fromExitSource: plan.walking.fromExit.source,
+    totalWalkingMeters: Math.round(totalWalkingMeters(plan))
   } : { detail: "no plan" }));
 
   return {
@@ -791,9 +976,19 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
       .filter((item) => item.index !== planIndex)
       .slice(0, 4),
     sources,
+    routeSelection: {
+      mode: routeSelection.auto ? "least_walking" : "fixed",
+      selectedRouteId: plan?.route?.id || null,
+      candidates: routeSelection.routes.map((item) => ({
+        routeId: item.route.routeId,
+        directWalkMeters: item.preview ? Math.round(item.preview.directWalkMeters) : null
+      }))
+    },
     candidateCounts: {
-      boardingStops: candidateStops.length,
-      exitStops: exitCandidates.length,
+      routesChecked: routeSelection.auto ? routeSelection.previews.length : routeSelection.routes.length,
+      routeCandidates: routeSelection.routes.length,
+      boardingStops: boardCandidateCount,
+      exitStops: exitCandidateCount,
       feasiblePlans: possiblePlans.length
     }
   };

@@ -1,5 +1,5 @@
 const state = {
-  routeId: "31",
+  routeId: "",
   destinationId: "chipotle",
   destination: {
     id: "chipotle",
@@ -318,7 +318,10 @@ function renderPlanOnMap() {
     [destination.lat, destination.lng],
     ...(state.currentLocation ? [[state.currentLocation.lat, state.currentLocation.lng]] : [])
   ]);
-  if (bounds.isValid()) map.fitBounds(bounds, { padding: [42, 42], maxZoom: 15 });
+  if (bounds.isValid()) {
+    const maxZoom = window.innerWidth < 560 ? 13 : 15;
+    map.fitBounds(bounds, { padding: [42, 42], maxZoom });
+  }
 }
 
 function pointForFocus(kind) {
@@ -503,8 +506,8 @@ function renderFacts() {
   const result = state.planResult;
   const plan = result?.plan;
   if (!plan) {
-    const routeId = state.routeId || "31";
-    setText(els.routeStatus, `Route ${routeId}`);
+    const routeId = state.routeId || "";
+    setText(els.routeStatus, routeId ? `Route ${routeId}` : "Route picked after destination");
     setText(els.sourceState, result?.sources?.map((source) => `${source.name}: ${source.ok ? "OK" : "blocked"}`).join(" / ") || "Checking");
     updateTripChoice();
     return;
@@ -604,8 +607,10 @@ function startLocationWatch() {
   );
 }
 
-async function loadRoute() {
-  state.routeId = (els.routeInput.value || "31").trim() || "31";
+async function loadRoute(routeId = state.routeId) {
+  const selectedRouteId = String(routeId || state.routeId || "").trim();
+  if (!selectedRouteId) return;
+  state.routeId = selectedRouteId;
   try {
     state.routeData = await api(`/api/route?routeId=${encodeURIComponent(state.routeId)}`);
     renderRoute();
@@ -620,12 +625,10 @@ async function refreshPlan() {
   if (!state.currentLocation) return;
   clearTimeout(planTimer);
   planTimer = setTimeout(async () => {
-    state.routeId = (els.routeInput.value || "31").trim() || "31";
     try {
       const params = new URLSearchParams({
         lat: String(state.currentLocation.lat),
         lng: String(state.currentLocation.lng),
-        routeId: state.routeId,
         choice: String(state.choiceOffset),
         now: String(Date.now()),
         ...destinationQueryParams()
@@ -633,6 +636,10 @@ async function refreshPlan() {
       const targetArrivalMs = targetArrivalMsFromInput();
       if (Number.isFinite(targetArrivalMs)) params.set("targetArrivalMs", String(targetArrivalMs));
       state.planResult = await api(`/api/plan?${params}`);
+      const plannedRouteId = state.planResult?.plan?.route?.id || "";
+      if (plannedRouteId && (!state.routeData || state.routeData.routeId !== plannedRouteId)) {
+        await loadRoute(plannedRouteId);
+      }
       renderFacts();
       renderPlanOnMap();
     } catch (error) {
@@ -646,7 +653,8 @@ async function refreshPlan() {
 
 async function refreshLive() {
   try {
-    const routeId = (els.routeInput.value || "31").trim() || "31";
+    const routeId = state.planResult?.plan?.route?.id || state.routeId;
+    if (!routeId) return;
     const live = await api(`/api/live?routeId=${encodeURIComponent(routeId)}`);
     state.liveStatus = live.status;
     updateVehicleSamples(live.vehicles || []);
@@ -675,8 +683,9 @@ function bindEvents() {
   });
   els.useGps.addEventListener("click", startLocationWatch);
   els.saveHome.addEventListener("click", saveCurrentHome);
-  els.routeInput.addEventListener("change", async () => {
+  els.routeInput?.addEventListener("change", async () => {
     resetTripChoice();
+    state.routeId = (els.routeInput.value || "").trim();
     await loadRoute();
     refreshPlan();
     refreshLive();
@@ -718,7 +727,6 @@ async function boot() {
   bindEvents();
   renderLocationState();
   await loadDestinations();
-  await loadRoute();
   startLocationWatch();
   useSavedHomeIfNeeded();
   refreshLive();

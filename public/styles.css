@@ -123,12 +123,8 @@ h1 {
   font-weight: 800;
 }
 
-.trip-controls input {
-  width: 74px;
-}
-
-.trip-controls label:nth-child(2) input {
-  width: min(290px, 36vw);
+.destination-control input {
+  width: min(390px, 42vw);
 }
 
 .arrival-control input {
@@ -459,12 +455,11 @@ h1 {
     flex-wrap: wrap;
   }
 
-  .trip-controls label:nth-child(2) {
+  .destination-control {
     flex: 1;
   }
 
-  .trip-controls label:nth-child(2) input,
-  .trip-controls select {
+  .destination-control input {
     width: 100%;
   }
 
@@ -507,11 +502,11 @@ h1 {
 
   .trip-controls {
     display: grid;
-    grid-template-columns: 74px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .arrival-control {
-    grid-column: 1 / -1;
+    grid-column: auto;
   }
 
   .arrival-control input {

@@ -26,13 +26,9 @@
         <h1>WRTA live bus</h1>
       </div>
       <form class="trip-controls" id="tripControls">
-        <label>
-          <span>Route</span>
-          <input id="routeInput" inputmode="numeric" autocomplete="off" value="31" aria-label="Route">
-        </label>
-        <label>
+        <label class="destination-control">
           <span>Destination</span>
-          <input id="destinationInput" list="destinationOptions" autocomplete="off" value="Chipotle, Park Ave" aria-label="Destination">
+          <input id="destinationInput" list="destinationOptions" autocomplete="off" value="Chipotle, Park Ave" aria-label="Destination" placeholder="Where to?">
           <datalist id="destinationOptions">
             <option value="Chipotle, Park Ave"></option>
           </datalist>
