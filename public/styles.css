@@ -127,8 +127,12 @@ h1 {
   width: 74px;
 }
 
-.trip-controls label:last-child input {
+.trip-controls label:nth-child(2) input {
   width: min(290px, 36vw);
+}
+
+.arrival-control input {
+  width: 118px;
 }
 
 .stable-screen {
@@ -152,7 +156,7 @@ h1 {
 
 .instruction-band h2 {
   margin: 2px 0 0;
-  font-size: clamp(2.35rem, 6.2vw, 4.9rem);
+  font-size: clamp(2.2rem, 5.4vw, 4.2rem);
   line-height: .94;
   letter-spacing: 0;
 }
@@ -163,6 +167,48 @@ h1 {
   font-size: clamp(1rem, 2vw, 1.35rem);
   line-height: 1.22;
   font-weight: 760;
+}
+
+.trip-layout {
+  display: grid;
+  grid-template-columns: minmax(420px, .95fr) minmax(390px, .72fr);
+  gap: 12px;
+  margin-top: 12px;
+  align-items: start;
+}
+
+.map-stack {
+  position: sticky;
+  top: 10px;
+  display: grid;
+  gap: 10px;
+}
+
+.plan-stack {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.trip-nav {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, .9);
+}
+
+.trip-nav strong {
+  min-width: 0;
+  color: var(--muted);
+  font-size: .9rem;
+  line-height: 1.2;
+  font-weight: 780;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 .timeline {
@@ -184,6 +230,11 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 253, 248, .9);
+  cursor: pointer;
+}
+
+.step:hover {
+  border-color: color-mix(in srgb, var(--route) 42%, var(--line));
 }
 
 .step-number {
@@ -201,7 +252,7 @@ h1 {
 .step-copy {
   min-width: 0;
   display: grid;
-  grid-template-columns: 116px minmax(150px, .36fr) minmax(0, 1fr);
+  grid-template-columns: 104px minmax(120px, .42fr) minmax(0, 1fr);
   gap: 3px 12px;
   align-items: center;
 }
@@ -232,14 +283,6 @@ h1 {
   font-weight: 720;
 }
 
-.map-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 310px;
-  gap: 12px;
-  margin-top: 12px;
-  align-items: stretch;
-}
-
 .map-panel,
 .state-panel {
   border: 1px solid var(--line);
@@ -251,9 +294,43 @@ h1 {
 
 #map {
   width: 100%;
-  height: min(58vh, 610px);
-  min-height: 420px;
+  height: min(63vh, 650px);
+  min-height: 430px;
   background: #dde8df;
+}
+
+.map-legend {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 253, 248, .94);
+  color: var(--muted);
+  font-size: .74rem;
+  line-height: 1;
+  font-weight: 780;
+}
+
+.map-legend span {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.legend-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 2px solid #fffaf1;
+  color: #fffaf1;
+  font-size: .62rem;
+  line-height: 1;
+  font-weight: 900;
+  box-shadow: 0 2px 8px rgba(40, 30, 20, .16);
 }
 
 .state-panel {
@@ -337,6 +414,27 @@ h1 {
   background: var(--green);
 }
 
+.pin.pull,
+.legend-dot.pull {
+  background: #8d6b2e;
+}
+
+.legend-dot.user {
+  background: var(--blue);
+}
+
+.legend-dot.stop {
+  background: var(--gold);
+}
+
+.legend-dot.exit {
+  background: var(--red);
+}
+
+.legend-dot.dest {
+  background: var(--green);
+}
+
 .fresh {
   color: var(--green);
 }
@@ -358,20 +456,37 @@ h1 {
   .trip-controls {
     grid-column: 1 / -1;
     width: 100%;
+    flex-wrap: wrap;
   }
 
-  .trip-controls label:last-child {
+  .trip-controls label:nth-child(2) {
     flex: 1;
   }
 
-  .trip-controls label:last-child input,
+  .trip-controls label:nth-child(2) input,
   .trip-controls select {
     width: 100%;
   }
 
   .instruction-band,
-  .map-row {
+  .trip-layout {
     grid-template-columns: 1fr;
+  }
+
+  .map-stack {
+    display: contents;
+  }
+
+  .map-panel {
+    order: 1;
+  }
+
+  .plan-stack {
+    order: 2;
+  }
+
+  .state-panel {
+    order: 3;
   }
 
   .step-copy {
@@ -379,8 +494,8 @@ h1 {
   }
 
   #map {
-    height: 52vh;
-    min-height: 340px;
+    height: 48vh;
+    min-height: 330px;
   }
 }
 
@@ -388,6 +503,19 @@ h1 {
   .stable-screen {
     width: calc(100% - 20px);
     padding-top: 10px;
+  }
+
+  .trip-controls {
+    display: grid;
+    grid-template-columns: 74px minmax(0, 1fr);
+  }
+
+  .arrival-control {
+    grid-column: 1 / -1;
+  }
+
+  .arrival-control input {
+    width: 100%;
   }
 
   .timeline {
@@ -417,7 +545,7 @@ h1 {
   }
 
   .instruction-band h2 {
-    font-size: clamp(2rem, 12vw, 3.15rem);
+    font-size: clamp(1.85rem, 11vw, 2.85rem);
   }
 
   .instruction-detail {
@@ -425,11 +553,28 @@ h1 {
   }
 
   #map {
-    height: 46vh;
-    min-height: 315px;
+    height: 44vh;
+    min-height: 300px;
   }
 
   .state-line {
     padding: 11px 12px;
+  }
+
+  .trip-nav {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .trip-nav strong {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .trip-nav button:first-child {
+    grid-column: 1;
+  }
+
+  .trip-nav button:last-child {
+    grid-column: 2;
   }
 }

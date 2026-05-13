@@ -18,7 +18,7 @@ const WALK_SPEED_MPS = 1.34;
 const STOP_BUFFER_MS = 3 * 60 * 1000;
 const BOARD_GRACE_MS = 60 * 1000;
 const MAX_BOARD_CANDIDATES = 10;
-const MAX_DEPARTURES_PER_STOP = 5;
+const MAX_DEPARTURES_PER_STOP = 10;
 const MAX_EXIT_CANDIDATES = 8;
 
 const destinations = {
@@ -567,6 +567,10 @@ function scorePlan({ walkToBoard, walkFromExit, busArrivalMs, nowMs, status, exi
     + missPenalty;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function compactStop(stop) {
   if (!stop) return null;
   return {
@@ -579,7 +583,54 @@ function compactStop(stop) {
   };
 }
 
-async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now(), routeId = "", customDestination = null) {
+function choiceSummary(plan, index) {
+  return {
+    index,
+    route: plan.route,
+    boardingStop: plan.boardingStop,
+    exitStop: plan.exitStop,
+    timings: plan.timings,
+    walking: {
+      toBoard: {
+        distanceMeters: plan.walking.toBoard.distanceMeters,
+        durationSeconds: plan.walking.toBoard.durationSeconds,
+        source: plan.walking.toBoard.source
+      },
+      fromExit: {
+        distanceMeters: plan.walking.fromExit.distanceMeters,
+        durationSeconds: plan.walking.fromExit.durationSeconds,
+        source: plan.walking.fromExit.source
+      }
+    },
+    status: plan.status
+  };
+}
+
+function tripChoices(plans) {
+  const bestByTrip = new Map();
+  for (const plan of plans) {
+    const key = `${plan.timings.serviceDate}:${plan.route.tripId}`;
+    const existing = bestByTrip.get(key);
+    if (!existing || plan.score < existing.score) bestByTrip.set(key, plan);
+  }
+  return [...bestByTrip.values()].sort((a, b) => {
+    return a.timings.exitArrivalMs - b.timings.exitArrivalMs
+      || a.timings.busArrivalMs - b.timings.busArrivalMs
+      || a.score - b.score;
+  });
+}
+
+function selectedChoiceIndex(choices, choiceOffset = 0, targetArrivalMs = NaN) {
+  if (!choices.length) return -1;
+  let base = 0;
+  if (Number.isFinite(targetArrivalMs)) {
+    const targetIndex = choices.findIndex((plan) => plan.timings.exitArrivalMs >= targetArrivalMs);
+    base = targetIndex >= 0 ? targetIndex : choices.length - 1;
+  }
+  return clamp(base + Math.trunc(Number(choiceOffset) || 0), 0, choices.length - 1);
+}
+
+async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now(), routeId = "", customDestination = null, options = {}) {
   const destination = resolveDestination(destinationId, customDestination);
   const selectedRouteId = normalizeRouteId(routeId || destination.defaultRouteId || DEFAULT_ROUTE_ID);
   const route = await getRouteData(selectedRouteId);
@@ -658,7 +709,16 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
           .sort((a, b) => Number(b.sequence) - Number(a.sequence))[0];
         const previousStop = previousStopTime ? stopById.get(previousStopTime.id) : null;
         const previousStopMs = previousStopTime ? timeStringToMs(departure.serviceDate, previousStopTime.time) : null;
-        const pullCordAtMs = Math.max(previousStopMs || exitArrivalMs - 90 * 1000, exitArrivalMs - 110 * 1000);
+        const earliestPullMs = busArrivalMs + 90 * 1000;
+        const latestPullMs = exitArrivalMs - 2 * 60 * 1000;
+        const scheduledPullMs = previousStopMs && exitArrivalMs - previousStopMs >= 90 * 1000
+          ? previousStopMs + 20 * 1000
+          : exitArrivalMs - 3 * 60 * 1000;
+        const pullCordAtMs = clamp(
+          scheduledPullMs,
+          Math.min(earliestPullMs, latestPullMs),
+          Math.max(earliestPullMs, latestPullMs)
+        );
         const stopWindow = (trip.stopTimes || [])
           .filter((stopTime) => Number(stopTime.sequence) >= boardSequence && Number(stopTime.sequence) <= Number(exitTime.sequence))
           .map((stopTime) => ({
@@ -711,7 +771,9 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   }
 
   possiblePlans.sort((a, b) => a.score - b.score);
-  const plan = possiblePlans[0] || null;
+  const choices = tripChoices(possiblePlans);
+  const planIndex = selectedChoiceIndex(choices, options.choiceOffset, options.targetArrivalMs);
+  const plan = planIndex >= 0 ? choices[planIndex] : null;
   const walkingOk = plan ? plan.walking.toBoard.sourceOk && plan.walking.fromExit.sourceOk : false;
   sources.push(sourceStatus("OSRM walking", walkingOk, plan ? {
     toBoardSource: plan.walking.toBoard.source,
@@ -721,25 +783,13 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   return {
     ok: Boolean(plan),
     plan,
-    alternatives: possiblePlans.slice(1, 4).map((item) => ({
-      boardingStop: item.boardingStop,
-      exitStop: item.exitStop,
-      timings: item.timings,
-      walking: {
-        toBoard: {
-          distanceMeters: item.walking.toBoard.distanceMeters,
-          durationSeconds: item.walking.toBoard.durationSeconds,
-          source: item.walking.toBoard.source
-        },
-        fromExit: {
-          distanceMeters: item.walking.fromExit.distanceMeters,
-          durationSeconds: item.walking.fromExit.durationSeconds,
-          source: item.walking.fromExit.source
-        }
-      },
-      route: item.route,
-      status: item.status
-    })),
+    selectedChoiceIndex: planIndex,
+    choiceCount: choices.length,
+    choices: choices.map((item, index) => choiceSummary(item, index)),
+    alternatives: choices
+      .map((item, index) => choiceSummary(item, index))
+      .filter((item) => item.index !== planIndex)
+      .slice(0, 4),
     sources,
     candidateCounts: {
       boardingStops: candidateStops.length,
@@ -826,11 +876,23 @@ async function handleApi(req, res, requestUrl) {
       : null;
     const routeId = requestUrl.searchParams.get("routeId") || requestUrl.searchParams.get("route") || "";
     const now = Number(requestUrl.searchParams.get("now") || Date.now());
+    const choiceOffset = Number(requestUrl.searchParams.get("choice") || 0);
+    const targetArrivalMs = Number(requestUrl.searchParams.get("targetArrivalMs") || NaN);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       sendJson(res, 400, { ok: false, error: "lat and lng are required" });
       return true;
     }
-    const result = await createPlan({ lat, lng }, destinationId, Number.isFinite(now) ? now : Date.now(), routeId, customDestination);
+    const result = await createPlan(
+      { lat, lng },
+      destinationId,
+      Number.isFinite(now) ? now : Date.now(),
+      routeId,
+      customDestination,
+      {
+        choiceOffset: Number.isFinite(choiceOffset) ? choiceOffset : 0,
+        targetArrivalMs: Number.isFinite(targetArrivalMs) ? targetArrivalMs : NaN
+      }
+    );
     sendJson(res, result.ok ? 200 : 404, result);
     return true;
   }

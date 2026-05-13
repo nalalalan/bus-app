@@ -17,12 +17,17 @@ const state = {
   watchId: null,
   vehicleSamples: new Map(),
   liveStatus: null,
-  mapReady: false
+  mapReady: false,
+  choiceOffset: 0
 };
 
 const els = {
   routeInput: document.getElementById("routeInput"),
   destinationInput: document.getElementById("destinationInput"),
+  arrivalInput: document.getElementById("arrivalInput"),
+  previousTrip: document.getElementById("previousTrip"),
+  nextTrip: document.getElementById("nextTrip"),
+  tripChoice: document.getElementById("tripChoice"),
   instructionText: document.getElementById("instructionText"),
   instructionDetail: document.getElementById("instructionDetail"),
   standByTime: document.getElementById("standByTime"),
@@ -62,6 +67,7 @@ let boardWalkLayer;
 let exitWalkLayer;
 let userMarker;
 let boardingMarker;
+let pullMarker;
 let exitMarker;
 let destinationMarker;
 let busMarker;
@@ -140,6 +146,24 @@ function destinationQueryParams() {
     };
   }
   return { destination: state.destinationId || "chipotle" };
+}
+
+function targetArrivalMsFromInput() {
+  const value = els.arrivalInput?.value || "";
+  if (!value) return NaN;
+  const [hours, minutes] = value.split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return NaN;
+  const target = new Date();
+  target.setHours(hours, minutes, 0, 0);
+  if (target.getTime() < Date.now() - 2 * 60 * 60 * 1000) {
+    target.setDate(target.getDate() + 1);
+  }
+  return target.getTime();
+}
+
+function resetTripChoice() {
+  state.choiceOffset = 0;
+  updateTripChoice();
 }
 
 function applyDestination(destination) {
@@ -251,6 +275,7 @@ function renderPlanOnMap() {
 
   const destination = plan.destination;
   const board = plan.boardingStop;
+  const pull = plan.previousStop || plan.exitStop;
   const exit = plan.exitStop;
 
   if (state.currentLocation) {
@@ -263,6 +288,9 @@ function renderPlanOnMap() {
   }
 
   boardingMarker = ensureMarker(boardingMarker, [board.lat, board.lng], pinIcon("stop", "B", "stop"), "Boarding stop");
+  if (pull) {
+    pullMarker = ensureMarker(pullMarker, [pull.lat, pull.lng], pinIcon("pull", "C", "pull"), "Pull cord point");
+  }
   exitMarker = ensureMarker(exitMarker, [exit.lat, exit.lng], pinIcon("exit", "X", "exit"), "Exit stop");
   destinationMarker = ensureMarker(destinationMarker, [destination.lat, destination.lng], pinIcon("dest", "D", "dest"), destination.name);
 
@@ -285,11 +313,31 @@ function renderPlanOnMap() {
 
   const bounds = L.latLngBounds([
     [board.lat, board.lng],
+    ...(pull ? [[pull.lat, pull.lng]] : []),
     [exit.lat, exit.lng],
     [destination.lat, destination.lng],
     ...(state.currentLocation ? [[state.currentLocation.lat, state.currentLocation.lng]] : [])
   ]);
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [42, 42], maxZoom: 15 });
+}
+
+function pointForFocus(kind) {
+  const plan = state.planResult?.plan;
+  if (!plan) return null;
+  if (kind === "origin" && state.currentLocation) return state.currentLocation;
+  if (kind === "board") return plan.boardingStop;
+  if (kind === "pull") return plan.previousStop || plan.exitStop;
+  if (kind === "exit") return plan.exitStop;
+  if (kind === "destination") return plan.destination;
+  return null;
+}
+
+function focusPlanPoint(kind) {
+  if (!state.mapReady) return;
+  const point = pointForFocus(kind);
+  if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) return;
+  map.setView([point.lat, point.lng], Math.max(map.getZoom(), 16), { animate: true });
+  document.getElementById("map")?.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 function updateVehicleSamples(vehicles = []) {
@@ -350,32 +398,33 @@ function currentInstruction(plan) {
   const boardDistance = haversineMeters(state.currentLocation, plan.boardingStop);
   const exitDistance = haversineMeters(state.currentLocation, plan.exitStop);
   const onboard = isOnboard(plan, now);
+  const pullByGps = now >= plan.timings.busArrivalMs && exitDistance < 520 && exitDistance > 80;
 
   if (onboard && exitDistance < 70) {
-    return { text: "GET OFF HERE", detail: `${plan.exitStop.name} is within ${formatFeet(exitDistance)}.` };
+    return { text: "GET OFF HERE", detail: `${plan.exitStop.name} is the red X marker; ${formatFeet(exitDistance)} away.` };
   }
 
-  if (onboard && (now >= plan.timings.pullCordAtMs || exitDistance < 430)) {
-    return { text: "PULL CORD NOW", detail: `${plan.exitStop.name}; get off at ${formatTime(plan.timings.exitArrivalMs)}.` };
+  if (onboard && (now >= plan.timings.pullCordAtMs || pullByGps)) {
+    return { text: "PULL CORD NOW", detail: `Near the C marker; get off at ${formatTime(plan.timings.exitArrivalMs)} at ${plan.exitStop.name}.` };
   }
 
   if (onboard) {
-    return { text: "Stay on bus", detail: `${remainingStopsText(plan)} remaining to ${plan.exitStop.name}.` };
+    return { text: "Stay on bus", detail: `${remainingStopsText(plan)} remaining; red X is ${plan.exitStop.name}.` };
   }
 
   if (boardDistance < 115 && now >= plan.timings.busArrivalMs - 90 * 1000 && now <= plan.timings.busArrivalMs + 90 * 1000) {
-    return { text: `Board Route ${plan.route.id}`, detail: `${plan.route.headsign}; bus arrival ${formatTime(plan.timings.busArrivalMs)}.` };
+    return { text: `Board Route ${plan.route.id}`, detail: `At B marker, ${plan.boardingStop.name}; bus arrival ${formatTime(plan.timings.busArrivalMs)}.` };
   }
 
   if (boardDistance < 85) {
-    return { text: "Wait here", detail: `${plan.boardingStop.name}; bus arrival ${formatTime(plan.timings.busArrivalMs)}.` };
+    return { text: "Wait here", detail: `At B marker, ${plan.boardingStop.name}; bus arrival ${formatTime(plan.timings.busArrivalMs)}.` };
   }
 
   if (plan.status === "miss") {
     return { text: "Walk to stop", detail: "Likely miss; next usable bus stays selected." };
   }
 
-  return { text: "Walk to stop", detail: `${plan.boardingStop.name}; ${formatWalk(plan.walking.toBoard.durationSeconds)} walk.` };
+  return { text: "Walk to stop", detail: `From blue me marker to B marker, ${plan.boardingStop.name}; ${formatWalk(plan.walking.toBoard.durationSeconds)} walk.` };
 }
 
 function remainingStopsText(plan) {
@@ -432,6 +481,24 @@ function vehicleStateText(plan) {
   return `Bus ${live.equipment || live.id} - ${freshness} - ${movement} - ${live.delay || "schedule state"}`;
 }
 
+function updateTripChoice() {
+  const result = state.planResult;
+  const plan = result?.plan;
+  if (!plan) {
+    setText(els.tripChoice, "Soonest trip");
+    if (els.previousTrip) els.previousTrip.disabled = state.choiceOffset <= 0;
+    if (els.nextTrip) els.nextTrip.disabled = true;
+    return;
+  }
+  const selected = Number(result.selectedChoiceIndex || 0);
+  const count = Number(result.choiceCount || 0);
+  setText(els.tripChoice, count > 1
+    ? `Trip ${selected + 1} of ${count} - get off ${formatTime(plan.timings.exitArrivalMs)}`
+    : `Get off ${formatTime(plan.timings.exitArrivalMs)}`);
+  if (els.previousTrip) els.previousTrip.disabled = selected <= 0;
+  if (els.nextTrip) els.nextTrip.disabled = count > 0 ? selected >= count - 1 : true;
+}
+
 function renderFacts() {
   const result = state.planResult;
   const plan = result?.plan;
@@ -439,6 +506,7 @@ function renderFacts() {
     const routeId = state.routeId || "31";
     setText(els.routeStatus, `Route ${routeId}`);
     setText(els.sourceState, result?.sources?.map((source) => `${source.name}: ${source.ok ? "OK" : "blocked"}`).join(" / ") || "Checking");
+    updateTripChoice();
     return;
   }
 
@@ -447,27 +515,30 @@ function renderFacts() {
   setText(els.instructionDetail, `${instruction.detail} ${statusLine(plan)}`);
 
   setText(els.standByTime, formatTime(plan.timings.standByMs));
-  setText(els.standBySub, "3 min before bus");
+  setText(els.standBySub, `B marker: ${plan.boardingStop.name}`);
   setText(els.leaveByTime, formatTime(plan.timings.leaveByMs));
-  setText(els.leaveBySub, leaveByStatus(plan));
+  setText(els.leaveBySub, `Current location, blue me marker. ${leaveByStatus(plan)}`);
   setText(els.boardingStop, plan.boardingStop.name);
   setText(els.boardingDistance, `${formatMiles(plan.walking.toBoard.distanceMeters)} away`);
   setText(els.walkTime, formatWalk(plan.walking.toBoard.durationSeconds));
-  setText(els.walkDistance, "walking route");
+  setText(els.walkDistance, "blue me marker to B marker");
   setText(els.busArrival, formatTime(plan.timings.busArrivalMs));
   setText(
     els.busArrivalSub,
-    plan.prediction ? `WRTA live; schedule ${formatTime(plan.timings.scheduledBusArrivalMs)}` : "Ride Guide schedule"
+    plan.prediction ? `B marker; WRTA live, schedule ${formatTime(plan.timings.scheduledBusArrivalMs)}` : "B marker; Ride Guide schedule"
   );
   setText(els.busTarget, `Route ${plan.route.id} to ${plan.route.headsign}`);
   setText(els.busLiveState, vehicleStateText(plan));
   setText(els.pullCord, formatTime(plan.timings.pullCordAtMs));
-  setText(els.pullCordSub, plan.previousStop ? `near ${plan.previousStop.name}` : "before exit stop");
-  setText(els.exitStop, plan.exitStop.name);
-  setText(els.exitSub, `${formatTime(plan.timings.exitArrivalMs)} - ${formatMiles(plan.walking.fromExit.distanceMeters)} from ${plan.destination.name}`);
+  setText(els.pullCordSub, plan.previousStop
+    ? `C marker after ${plan.previousStop.name}; before red X at ${plan.exitStop.name}`
+    : `C marker before red X at ${plan.exitStop.name}`);
+  setText(els.exitStop, `${formatTime(plan.timings.exitArrivalMs)} - ${plan.exitStop.name}`);
+  setText(els.exitSub, `Red X marker; ${formatMiles(plan.walking.fromExit.distanceMeters)} from ${plan.destination.name}`);
   setText(els.stopsRemaining, remainingStopsText(plan));
   setText(els.routeStatus, `Route ${plan.route.id} - ${plan.route.headsign}`);
   setText(els.sourceState, (result.sources || []).map((source) => `${source.name}: ${source.ok ? "OK" : "blocked"}`).join(" / "));
+  updateTripChoice();
 }
 
 function renderLocationState() {
@@ -555,9 +626,12 @@ async function refreshPlan() {
         lat: String(state.currentLocation.lat),
         lng: String(state.currentLocation.lng),
         routeId: state.routeId,
+        choice: String(state.choiceOffset),
         now: String(Date.now()),
         ...destinationQueryParams()
       });
+      const targetArrivalMs = targetArrivalMsFromInput();
+      if (Number.isFinite(targetArrivalMs)) params.set("targetArrivalMs", String(targetArrivalMs));
       state.planResult = await api(`/api/plan?${params}`);
       renderFacts();
       renderPlanOnMap();
@@ -596,20 +670,46 @@ function saveCurrentHome() {
 function bindEvents() {
   document.getElementById("tripControls").addEventListener("submit", (event) => {
     event.preventDefault();
+    resetTripChoice();
     resolveDestinationInput();
   });
   els.useGps.addEventListener("click", startLocationWatch);
   els.saveHome.addEventListener("click", saveCurrentHome);
   els.routeInput.addEventListener("change", async () => {
+    resetTripChoice();
     await loadRoute();
     refreshPlan();
     refreshLive();
   });
-  els.destinationInput.addEventListener("change", resolveDestinationInput);
-  els.destinationInput.addEventListener("blur", resolveDestinationInput);
+  els.destinationInput.addEventListener("change", () => {
+    resetTripChoice();
+    resolveDestinationInput();
+  });
+  els.destinationInput.addEventListener("blur", () => {
+    resetTripChoice();
+    resolveDestinationInput();
+  });
   els.destinationInput.addEventListener("input", () => {
     clearTimeout(destinationTimer);
-    destinationTimer = setTimeout(resolveDestinationInput, 900);
+    destinationTimer = setTimeout(() => {
+      resetTripChoice();
+      resolveDestinationInput();
+    }, 900);
+  });
+  els.arrivalInput?.addEventListener("change", () => {
+    resetTripChoice();
+    refreshPlan();
+  });
+  els.previousTrip?.addEventListener("click", () => {
+    state.choiceOffset -= 1;
+    refreshPlan();
+  });
+  els.nextTrip?.addEventListener("click", () => {
+    state.choiceOffset += 1;
+    refreshPlan();
+  });
+  document.querySelectorAll(".step[data-focus]").forEach((step) => {
+    step.addEventListener("click", () => focusPlanPoint(step.dataset.focus));
   });
 }
 

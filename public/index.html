@@ -10,8 +10,8 @@
     <meta property="og:description" content="One stable live screen for WRTA bus timing, stop choice, vehicle position, and pull-cord timing.">
     <meta property="og:url" content="https://bus.aolabs.io/">
     <meta property="og:type" content="website">
-    <link rel="icon" href="/icon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="/apple-touch-icon.svg">
+    <link rel="icon" href="https://aolabs.io/favicon.svg?v=20260513-ao-ring" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="https://aolabs.io/marks/ao-ink.svg?v=20260513-ao-ring">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <link rel="stylesheet" href="/styles.css">
@@ -37,6 +37,10 @@
             <option value="Chipotle, Park Ave"></option>
           </datalist>
         </label>
+        <label class="arrival-control">
+          <span>Arrive after</span>
+          <input id="arrivalInput" type="time" aria-label="Arrive after">
+        </label>
       </form>
     </header>
 
@@ -49,88 +53,105 @@
         <p id="instructionDetail" class="instruction-detail">Waiting for current location.</p>
       </section>
 
-      <ol class="timeline" aria-label="Trip timeline">
-        <li class="step">
-          <span class="step-number">1</span>
-          <div class="step-copy">
-            <span class="label">Leave</span>
-            <strong id="leaveByTime">--</strong>
-            <small id="leaveBySub">latest departure</small>
+      <section class="trip-layout">
+        <div class="map-stack">
+          <div class="map-panel">
+            <div class="map-legend" aria-label="Map markers">
+              <span><b class="legend-dot user">me</b> current</span>
+              <span><b class="legend-dot stop">B</b> board</span>
+              <span><b class="legend-dot pull">C</b> cord</span>
+              <span><b class="legend-dot exit">X</b> off</span>
+              <span><b class="legend-dot dest">D</b> destination</span>
+            </div>
+            <div id="map" aria-label="Live bus map"></div>
           </div>
-        </li>
-        <li class="step">
-          <span class="step-number">2</span>
-          <div class="step-copy">
-            <span class="label">Walk</span>
-            <strong><span id="walkTime">--</span> to <span id="boardingStop">--</span></strong>
-            <small><span id="boardingDistance">--</span> - <span id="walkDistance">--</span></small>
-          </div>
-        </li>
-        <li class="step">
-          <span class="step-number">3</span>
-          <div class="step-copy">
-            <span class="label">Stand at stop</span>
-            <strong id="standByTime">--</strong>
-            <small id="standBySub">fixed clock time</small>
-          </div>
-        </li>
-        <li class="step">
-          <span class="step-number">4</span>
-          <div class="step-copy">
-            <span class="label">Board</span>
-            <strong id="busArrival">--</strong>
-            <small id="busTarget">--</small>
-            <small id="busLiveState">--</small>
-            <small id="busArrivalSub">schedule/live source</small>
-          </div>
-        </li>
-        <li class="step">
-          <span class="step-number">5</span>
-          <div class="step-copy">
-            <span class="label">Pull cord</span>
-            <strong id="pullCord">--</strong>
-            <small id="pullCordSub">--</small>
-          </div>
-        </li>
-        <li class="step">
-          <span class="step-number">6</span>
-          <div class="step-copy">
-            <span class="label">Get off</span>
-            <strong id="exitStop">--</strong>
-            <small id="exitSub">--</small>
-          </div>
-        </li>
-      </ol>
 
-      <section class="map-row">
-        <div class="map-panel">
-          <div id="map" aria-label="Live bus map"></div>
+          <aside class="state-panel" aria-label="Current state">
+            <div class="state-line">
+              <span class="label">Location</span>
+              <strong id="locationState">Waiting</strong>
+              <button id="useGps" type="button">Use GPS</button>
+            </div>
+            <div class="state-line">
+              <span class="label">Saved home</span>
+              <strong id="homeState">Not set</strong>
+              <button id="saveHome" type="button">Save here</button>
+            </div>
+            <div class="state-line">
+              <span class="label">Stops remaining</span>
+              <strong id="stopsRemaining">--</strong>
+            </div>
+            <div class="state-line">
+              <span class="label">Route status</span>
+              <strong id="routeStatus">Route ready</strong>
+            </div>
+            <div class="state-line sources">
+              <span class="label">Sources</span>
+              <strong id="sourceState">Checking</strong>
+            </div>
+          </aside>
         </div>
 
-        <aside class="state-panel" aria-label="Current state">
-          <div class="state-line">
-            <span class="label">Location</span>
-            <strong id="locationState">Waiting</strong>
-            <button id="useGps" type="button">Use GPS</button>
+        <div class="plan-stack">
+          <div class="trip-nav" aria-label="Trip choice">
+            <button id="previousTrip" type="button">Earlier</button>
+            <strong id="tripChoice">Soonest trip</strong>
+            <button id="nextTrip" type="button">Next</button>
           </div>
-          <div class="state-line">
-            <span class="label">Saved home</span>
-            <strong id="homeState">Not set</strong>
-            <button id="saveHome" type="button">Save here</button>
-          </div>
-          <div class="state-line">
-            <span class="label">Stops remaining</span>
-            <strong id="stopsRemaining">--</strong>
-          </div>
-          <div class="state-line">
-            <span class="label">Route status</span>
-            <strong id="routeStatus">Route ready</strong>
-          </div>
-          <div class="state-line sources">
-            <span class="label">Sources</span>
-            <strong id="sourceState">Checking</strong>
-          </div>
-        </aside>
+
+          <ol class="timeline" aria-label="Trip timeline">
+            <li class="step" data-focus="origin">
+              <span class="step-number">1</span>
+              <div class="step-copy">
+                <span class="label">Leave from</span>
+                <strong id="leaveByTime">--</strong>
+                <small id="leaveBySub">current location - blue me marker</small>
+              </div>
+            </li>
+            <li class="step" data-focus="board">
+              <span class="step-number">2</span>
+              <div class="step-copy">
+                <span class="label">Walk to</span>
+                <strong><span id="walkTime">--</span> to <span id="boardingStop">--</span></strong>
+                <small><span id="boardingDistance">--</span> - <span id="walkDistance">--</span></small>
+              </div>
+            </li>
+            <li class="step" data-focus="board">
+              <span class="step-number">3</span>
+              <div class="step-copy">
+                <span class="label">Stand at</span>
+                <strong id="standByTime">--</strong>
+                <small id="standBySub">B marker on map</small>
+              </div>
+            </li>
+            <li class="step" data-focus="board">
+              <span class="step-number">4</span>
+              <div class="step-copy">
+                <span class="label">Board at</span>
+                <strong id="busArrival">--</strong>
+                <small id="busTarget">--</small>
+                <small id="busLiveState">--</small>
+                <small id="busArrivalSub">schedule/live source</small>
+              </div>
+            </li>
+            <li class="step" data-focus="pull">
+              <span class="step-number">5</span>
+              <div class="step-copy">
+                <span class="label">Pull cord near</span>
+                <strong id="pullCord">--</strong>
+                <small id="pullCordSub">C marker on map</small>
+              </div>
+            </li>
+            <li class="step" data-focus="exit">
+              <span class="step-number">6</span>
+              <div class="step-copy">
+                <span class="label">Get off at</span>
+                <strong id="exitStop">--</strong>
+                <small id="exitSub">--</small>
+              </div>
+            </li>
+          </ol>
+        </div>
       </section>
     </main>
 
