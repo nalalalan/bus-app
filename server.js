@@ -224,6 +224,80 @@ async function geocodeDestination(query) {
   };
 }
 
+function destinationLabelFromNominatim(row, fallback) {
+  const address = row.address || {};
+  return address.amenity
+    || address.building
+    || address.office
+    || address.shop
+    || address.tourism
+    || address.leisure
+    || address.road
+    || String(row.name || "").trim()
+    || fallback;
+}
+
+async function suggestDestinations(query) {
+  const trimmed = String(query || "").trim();
+  if (trimmed.length < 2) return [];
+
+  const saved = Object.values(destinations)
+    .filter((destination) => {
+      const haystack = [destination.id, destination.name, destination.label, destination.address].join(" ").toLowerCase();
+      return haystack.includes(trimmed.toLowerCase());
+    })
+    .map((destination) => ({
+      ...destination,
+      source: "saved destination",
+      sourceOk: true
+    }));
+
+  const q = /worcester|massachusetts|\bma\b/i.test(trimmed)
+    ? trimmed
+    : `${trimmed}, Worcester, MA`;
+  const rows = await fetchJson(withParams(NOMINATIM_BASE, {
+    format: "jsonv2",
+    limit: 8,
+    countrycodes: "us",
+    addressdetails: 1,
+    namedetails: 1,
+    q
+  }), {
+    headers: {
+      "accept-language": "en"
+    },
+    timeoutMs: 9000
+  });
+
+  const suggestions = [...saved];
+  const seen = new Set(suggestions.map((item) => `${item.lat}:${item.lng}:${item.label}`));
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const display = String(row.display_name || "");
+    const inWorcester = display.toLowerCase().includes("worcester") && display.toLowerCase().includes("massachusetts");
+    if (!inWorcester) continue;
+    const lat = Number(row.lat);
+    const lng = Number(row.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const label = destinationLabelFromNominatim(row, trimmed);
+    const key = `${lat.toFixed(6)}:${lng.toFixed(6)}:${label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    suggestions.push({
+      id: `suggestion-${suggestions.length}`,
+      name: label,
+      label,
+      address: display,
+      lat,
+      lng,
+      defaultRouteId: "",
+      source: "Nominatim",
+      sourceOk: true
+    });
+  }
+
+  return suggestions.slice(0, 8);
+}
+
 function withParams(base, params = {}) {
   const url = new URL(base);
   for (const [key, value] of Object.entries(params)) {
@@ -1022,6 +1096,20 @@ async function handleApi(req, res, requestUrl) {
       destination,
       sources: [
         sourceStatus(destination.source || "destination geocode", true)
+      ]
+    });
+    return true;
+  }
+
+  if (requestUrl.pathname === "/api/suggestions") {
+    const query = requestUrl.searchParams.get("q") || requestUrl.searchParams.get("destination") || "";
+    const suggestions = await suggestDestinations(query);
+    sendJson(res, 200, {
+      ok: true,
+      query,
+      suggestions,
+      sources: [
+        sourceStatus("destination suggestions", true, { count: suggestions.length })
       ]
     });
     return true;

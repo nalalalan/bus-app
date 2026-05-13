@@ -9,6 +9,7 @@ const state = {
     lng: -71.8082589
   },
   savedDestinations: [],
+  destinationSuggestions: [],
   routeData: null,
   planResult: null,
   currentLocation: null,
@@ -74,6 +75,7 @@ let busMarker;
 let planTimer;
 let liveTimer;
 let destinationTimer;
+let suggestionTimer;
 let busRenderState = null;
 let lastBusFrameMs = 0;
 
@@ -162,6 +164,14 @@ function setText(element, value) {
   element.textContent = value || "--";
 }
 
+function escapeAttribute(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 function savedDestinationMatch(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) return null;
@@ -172,9 +182,20 @@ function savedDestinationMatch(value) {
   }) || null;
 }
 
+function suggestionDestinationMatch(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  return state.destinationSuggestions.find((destination) => {
+    return [destination.label, destination.name, destination.address]
+      .filter(Boolean)
+      .some((item) => String(item).trim().toLowerCase() === normalized);
+  }) || null;
+}
+
 function destinationQueryParams() {
   const destination = state.destination || {};
-  if (destination.id && destination.id !== "custom") {
+  const isSavedDestination = destination.id && state.savedDestinations.some((saved) => saved.id === destination.id);
+  if (isSavedDestination) {
     return { destination: destination.id };
   }
   if (Number.isFinite(destination.lat) && Number.isFinite(destination.lng)) {
@@ -217,27 +238,61 @@ function applyDestination(destination) {
   if (label && els.destinationInput.value !== label) els.destinationInput.value = label;
 }
 
+function renderDestinationOptions() {
+  const datalist = document.getElementById("destinationOptions");
+  if (!datalist) return;
+  const byValue = new Map();
+  for (const destination of [...state.savedDestinations, ...state.destinationSuggestions]) {
+    const value = destination.label || destination.name || "";
+    if (!value || byValue.has(value)) continue;
+    byValue.set(value, destination);
+  }
+  datalist.innerHTML = [...byValue.values()]
+    .map((destination) => {
+      const value = escapeAttribute(destination.label || destination.name || "");
+      const label = escapeAttribute(destination.address || destination.name || "");
+      return `<option value="${value}" label="${label}"></option>`;
+    })
+    .join("");
+}
+
 async function loadDestinations() {
   try {
     const data = await api("/api/destinations");
     state.savedDestinations = data.destinations || [];
-    const datalist = document.getElementById("destinationOptions");
-    if (datalist) {
-      datalist.innerHTML = state.savedDestinations
-        .map((destination) => `<option value="${destination.label || destination.name}"></option>`)
-        .join("");
-    }
+    renderDestinationOptions();
     applyDestination(savedDestinationMatch(els.destinationInput.value) || state.savedDestinations[0] || state.destination);
   } catch {
     state.savedDestinations = [];
   }
 }
 
+async function refreshDestinationSuggestions() {
+  const value = els.destinationInput.value.trim();
+  if (value.length < 2) {
+    state.destinationSuggestions = [];
+    renderDestinationOptions();
+    return;
+  }
+  try {
+    const data = await api(`/api/suggestions?q=${encodeURIComponent(value)}`);
+    state.destinationSuggestions = data.suggestions || [];
+    renderDestinationOptions();
+    if (state.destinationSuggestions.length) {
+      setText(els.sourceState, `${state.destinationSuggestions.length} destination suggestions`);
+    }
+  } catch (error) {
+    state.destinationSuggestions = [];
+    renderDestinationOptions();
+    setText(els.sourceState, `Suggestions blocked: ${error.message}`);
+  }
+}
+
 async function resolveDestinationInput() {
   const value = els.destinationInput.value.trim();
-  const saved = savedDestinationMatch(value);
-  if (saved) {
-    applyDestination(saved);
+  const matched = savedDestinationMatch(value) || suggestionDestinationMatch(value);
+  if (matched) {
+    applyDestination(matched);
     refreshPlan();
     return;
   }
@@ -835,9 +890,21 @@ function bindEvents() {
   });
   els.destinationInput.addEventListener("input", () => {
     clearTimeout(destinationTimer);
+    clearTimeout(suggestionTimer);
+    resetTripChoice();
+    const exactDestination = savedDestinationMatch(els.destinationInput.value) || suggestionDestinationMatch(els.destinationInput.value);
+    if (exactDestination) {
+      applyDestination(exactDestination);
+      refreshPlan();
+      return;
+    }
+    suggestionTimer = setTimeout(refreshDestinationSuggestions, 260);
     destinationTimer = setTimeout(() => {
-      resetTripChoice();
-      resolveDestinationInput();
+      const exactSuggestion = suggestionDestinationMatch(els.destinationInput.value);
+      if (exactSuggestion) {
+        applyDestination(exactSuggestion);
+        refreshPlan();
+      }
     }, 900);
   });
   els.arrivalInput?.addEventListener("change", () => {
