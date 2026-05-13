@@ -49,48 +49,58 @@
         <p id="instructionDetail" class="instruction-detail">Waiting for current location.</p>
       </section>
 
-      <section class="facts" aria-label="Trip facts">
-        <div class="fact">
-          <span class="label">Be at stop by</span>
-          <strong id="standByTime">--</strong>
-          <small id="standBySub">fixed clock time</small>
-        </div>
-        <div class="fact">
-          <span class="label">Leave by</span>
-          <strong id="leaveByTime">--</strong>
-          <small id="leaveBySub">latest departure</small>
-        </div>
-        <div class="fact">
-          <span class="label">Stop</span>
-          <strong id="boardingStop">--</strong>
-          <small id="boardingDistance">--</small>
-        </div>
-        <div class="fact">
-          <span class="label">Walk</span>
-          <strong id="walkTime">--</strong>
-          <small id="walkDistance">--</small>
-        </div>
-        <div class="fact">
-          <span class="label">Bus arrives</span>
-          <strong id="busArrival">--</strong>
-          <small id="busArrivalSub">schedule/live source</small>
-        </div>
-        <div class="fact">
-          <span class="label">Bus</span>
-          <strong id="busTarget">--</strong>
-          <small id="busLiveState">--</small>
-        </div>
-        <div class="fact">
-          <span class="label">Pull cord</span>
-          <strong id="pullCord">--</strong>
-          <small id="pullCordSub">--</small>
-        </div>
-        <div class="fact">
-          <span class="label">Get off</span>
-          <strong id="exitStop">--</strong>
-          <small id="exitSub">--</small>
-        </div>
-      </section>
+      <ol class="timeline" aria-label="Trip timeline">
+        <li class="step">
+          <span class="step-number">1</span>
+          <div class="step-copy">
+            <span class="label">Leave</span>
+            <strong id="leaveByTime">--</strong>
+            <small id="leaveBySub">latest departure</small>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-number">2</span>
+          <div class="step-copy">
+            <span class="label">Walk</span>
+            <strong><span id="walkTime">--</span> to <span id="boardingStop">--</span></strong>
+            <small><span id="boardingDistance">--</span> - <span id="walkDistance">--</span></small>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-number">3</span>
+          <div class="step-copy">
+            <span class="label">Stand at stop</span>
+            <strong id="standByTime">--</strong>
+            <small id="standBySub">fixed clock time</small>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-number">4</span>
+          <div class="step-copy">
+            <span class="label">Board</span>
+            <strong id="busArrival">--</strong>
+            <small id="busTarget">--</small>
+            <small id="busLiveState">--</small>
+            <small id="busArrivalSub">schedule/live source</small>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-number">5</span>
+          <div class="step-copy">
+            <span class="label">Pull cord</span>
+            <strong id="pullCord">--</strong>
+            <small id="pullCordSub">--</small>
+          </div>
+        </li>
+        <li class="step">
+          <span class="step-number">6</span>
+          <div class="step-copy">
+            <span class="label">Get off</span>
+            <strong id="exitStop">--</strong>
+            <small id="exitSub">--</small>
+          </div>
+        </li>
+      </ol>
 
       <section class="map-row">
         <div class="map-panel">

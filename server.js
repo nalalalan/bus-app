@@ -493,11 +493,12 @@ async function walkingRoute(from, to) {
       const data = await fetchJson(url, { timeoutMs: 9000 });
       const route = data?.routes?.[0];
       if (!route) return walkFallback(from, to, "OSRM route missing");
+      const walkingSeconds = Math.max(route.duration, route.distance / WALK_SPEED_MPS);
       return {
         distanceMeters: route.distance,
-        durationSeconds: route.duration,
+        durationSeconds: walkingSeconds,
         geometry: route.geometry?.coordinates || [[from.lng, from.lat], [to.lng, to.lat]],
-        source: "OSRM walking",
+        source: "OSRM path + walking pace",
         sourceOk: true
       };
     } catch (error) {

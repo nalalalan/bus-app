@@ -152,7 +152,7 @@ h1 {
 
 .instruction-band h2 {
   margin: 2px 0 0;
-  font-size: clamp(2.45rem, 8vw, 5.8rem);
+  font-size: clamp(2.35rem, 6.2vw, 4.9rem);
   line-height: .94;
   letter-spacing: 0;
 }
@@ -165,36 +165,71 @@ h1 {
   font-weight: 760;
 }
 
-.facts {
+.timeline {
+  list-style: none;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 12px;
+  grid-template-columns: 1fr;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding: 0;
 }
 
-.fact {
-  min-height: 96px;
+.step {
+  min-height: 64px;
   display: grid;
-  align-content: start;
-  gap: 5px;
-  padding: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(255, 253, 248, .88);
+  background: rgba(255, 253, 248, .9);
 }
 
-.fact strong {
-  font-size: clamp(1.12rem, 2vw, 1.55rem);
-  line-height: 1.04;
+.step-number {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--route) 15%, #ffffff);
+  color: color-mix(in srgb, var(--ink) 72%, var(--route));
+  font-size: .82rem;
+  font-weight: 900;
+}
+
+.step-copy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 116px minmax(150px, .36fr) minmax(0, 1fr);
+  gap: 3px 12px;
+  align-items: center;
+}
+
+.step-copy .label {
+  grid-column: 1;
+  grid-row: 1 / span 4;
+}
+
+.step-copy strong {
+  grid-column: 2;
+  grid-row: 1 / span 4;
+  align-self: center;
+}
+
+.step strong {
+  font-size: clamp(1.05rem, 1.6vw, 1.42rem);
+  line-height: 1.08;
   letter-spacing: 0;
   overflow-wrap: anywhere;
 }
 
-.fact small {
+.step small {
+  grid-column: 3;
   color: var(--muted);
-  font-size: .84rem;
-  line-height: 1.2;
-  font-weight: 700;
+  font-size: .82rem;
+  line-height: 1.22;
+  font-weight: 720;
 }
 
 .map-row {
@@ -339,8 +374,8 @@ h1 {
     grid-template-columns: 1fr;
   }
 
-  .facts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .step-copy {
+    grid-template-columns: 104px minmax(128px, .42fr) minmax(0, 1fr);
   }
 
   #map {
@@ -355,24 +390,26 @@ h1 {
     padding-top: 10px;
   }
 
-  .facts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .timeline {
+    grid-template-columns: 1fr;
     gap: 8px;
   }
 
-  .fact {
-    min-height: 72px;
-    padding: 9px;
-    gap: 4px;
+  .step {
+    min-height: 0;
+    padding: 10px;
   }
 
-  .fact strong {
-    font-size: 1rem;
-    line-height: 1.08;
+  .step-copy {
+    grid-template-columns: 1fr;
+    gap: 3px;
   }
 
-  .fact small {
-    font-size: .76rem;
+  .step-copy .label,
+  .step-copy strong,
+  .step small {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .instruction-band {
@@ -380,7 +417,7 @@ h1 {
   }
 
   .instruction-band h2 {
-    font-size: clamp(2.05rem, 14vw, 3.4rem);
+    font-size: clamp(2rem, 12vw, 3.15rem);
   }
 
   .instruction-detail {

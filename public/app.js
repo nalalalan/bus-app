@@ -397,10 +397,29 @@ function statusLine(plan) {
   if (!plan) return "No usable trip from current location.";
   const now = Date.now();
   const marginMinutes = Math.floor((plan.timings.leaveByMs - now) / 60000);
+  if (plan.status === "on_time" && marginMinutes >= 60) return "Early; no action yet.";
   if (plan.status === "on_time") return `On time; ${Math.max(0, marginMinutes)} min before latest leave.`;
   if (plan.status === "walk_faster") return "Walk faster; still catchable.";
   if (plan.status === "miss") return "Likely miss; waiting for next usable bus.";
   return "Current plan selected.";
+}
+
+function leadTimeText(minutes) {
+  const safeMinutes = Math.max(0, Math.floor(Number(minutes) || 0));
+  if (safeMinutes >= 60) {
+    const hours = Math.floor(safeMinutes / 60);
+    const remaining = safeMinutes % 60;
+    return remaining ? `${hours} hr ${remaining} min` : `${hours} hr`;
+  }
+  return `${safeMinutes} min`;
+}
+
+function leaveByStatus(plan) {
+  if (!plan) return "latest departure";
+  const now = Date.now();
+  const marginMinutes = Math.floor((plan.timings.leaveByMs - now) / 60000);
+  if (plan.status === "on_time" && marginMinutes >= 60) return `No action yet; ${leadTimeText(marginMinutes)} before latest leave.`;
+  return statusLine(plan);
 }
 
 function vehicleStateText(plan) {
@@ -430,11 +449,11 @@ function renderFacts() {
   setText(els.standByTime, formatTime(plan.timings.standByMs));
   setText(els.standBySub, "3 min before bus");
   setText(els.leaveByTime, formatTime(plan.timings.leaveByMs));
-  setText(els.leaveBySub, statusLine(plan));
+  setText(els.leaveBySub, leaveByStatus(plan));
   setText(els.boardingStop, plan.boardingStop.name);
   setText(els.boardingDistance, `${formatMiles(plan.walking.toBoard.distanceMeters)} away`);
   setText(els.walkTime, formatWalk(plan.walking.toBoard.durationSeconds));
-  setText(els.walkDistance, plan.walking.toBoard.source);
+  setText(els.walkDistance, "walking route");
   setText(els.busArrival, formatTime(plan.timings.busArrivalMs));
   setText(
     els.busArrivalSub,
