@@ -53,7 +53,10 @@ const els = {
   routeStatus: document.getElementById("routeStatus"),
   sourceState: document.getElementById("sourceState"),
   useGps: document.getElementById("useGps"),
-  saveHome: document.getElementById("saveHome")
+  saveHome: document.getElementById("saveHome"),
+  viewBus: document.getElementById("viewBus"),
+  viewRoute: document.getElementById("viewRoute"),
+  viewMe: document.getElementById("viewMe")
 };
 
 const timeFormatter = new Intl.DateTimeFormat("en-US", {
@@ -365,6 +368,28 @@ function renderRoute() {
   if (!state.currentLocation && routeLayer.getBounds().isValid()) {
     map.fitBounds(routeLayer.getBounds(), { padding: [22, 22] });
   }
+  updateMapViewButtons();
+}
+
+function planMapBounds(plan = state.planResult?.plan) {
+  if (!plan) return null;
+  const points = [
+    plan.boardingStop,
+    plan.previousStop || plan.exitStop,
+    plan.exitStop,
+    plan.destination,
+    state.currentLocation
+  ].filter((point) => point && Number.isFinite(point.lat) && Number.isFinite(point.lng));
+  if (!points.length) return null;
+  const bounds = L.latLngBounds(points.map((point) => [point.lat, point.lng]));
+  return bounds.isValid() ? bounds : null;
+}
+
+function fitPlanBounds() {
+  const bounds = planMapBounds();
+  if (!bounds) return;
+  const maxZoom = window.innerWidth < 560 ? 13 : 15;
+  map.fitBounds(bounds, { padding: [42, 42], maxZoom });
 }
 
 function renderPlanOnMap() {
@@ -409,17 +434,8 @@ function renderPlanOnMap() {
     dashArray: "4 7"
   }).addTo(map);
 
-  const bounds = L.latLngBounds([
-    [board.lat, board.lng],
-    ...(pull ? [[pull.lat, pull.lng]] : []),
-    [exit.lat, exit.lng],
-    [destination.lat, destination.lng],
-    ...(state.currentLocation ? [[state.currentLocation.lat, state.currentLocation.lng]] : [])
-  ]);
-  if (bounds.isValid()) {
-    const maxZoom = window.innerWidth < 560 ? 13 : 15;
-    map.fitBounds(bounds, { padding: [42, 42], maxZoom });
-  }
+  fitPlanBounds();
+  updateMapViewButtons();
 }
 
 function pointForFocus(kind) {
@@ -441,6 +457,50 @@ function focusPlanPoint(kind) {
   document.getElementById("map")?.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
+function currentBusPoint() {
+  if (busRenderState && Number.isFinite(busRenderState.lat) && Number.isFinite(busRenderState.lng)) {
+    return busRenderState;
+  }
+  const vehicle = estimatedVehiclePosition(selectedVehicleSample());
+  if (vehicle && Number.isFinite(vehicle.lat) && Number.isFinite(vehicle.lng)) return vehicle;
+  return null;
+}
+
+function showMap() {
+  document.getElementById("map")?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function focusBusView() {
+  if (!state.mapReady) return;
+  const point = currentBusPoint();
+  if (!point) return;
+  map.setView([point.lat, point.lng], 17, { animate: true });
+  showMap();
+}
+
+function focusRouteView() {
+  if (!state.mapReady) return;
+  const routeBounds = routeLayer?.getBounds?.();
+  if (routeBounds?.isValid?.()) {
+    map.fitBounds(routeBounds, { padding: [30, 30], maxZoom: 14 });
+  } else {
+    fitPlanBounds();
+  }
+  showMap();
+}
+
+function focusMeView() {
+  if (!state.mapReady || !state.currentLocation) return;
+  map.setView([state.currentLocation.lat, state.currentLocation.lng], 18, { animate: true });
+  showMap();
+}
+
+function updateMapViewButtons() {
+  if (els.viewBus) els.viewBus.disabled = !currentBusPoint();
+  if (els.viewRoute) els.viewRoute.disabled = !(routeLayer || state.planResult?.plan);
+  if (els.viewMe) els.viewMe.disabled = !state.currentLocation;
+}
+
 function updateVehicleSamples(vehicles = []) {
   const now = Date.now();
   for (const vehicle of vehicles) {
@@ -450,6 +510,7 @@ function updateVehicleSamples(vehicles = []) {
       current: { ...vehicle, sampledAt: now }
     });
   }
+  updateMapViewButtons();
 }
 
 function selectedVehicleSample() {
@@ -549,6 +610,7 @@ function animateBusMarker() {
     const title = vehicle.positionMode === "stale" ? "Stale bus position" : vehicle.displayEstimated ? "Estimated live bus position" : "Live bus";
     busMarker = ensureMarker(busMarker, [vehicle.lat, vehicle.lng], pinIcon(modeClass, label, "bus"), title);
   }
+  updateMapViewButtons();
   requestAnimationFrame(animateBusMarker);
 }
 
@@ -731,6 +793,7 @@ function renderLocationState() {
   }
   const home = savedHome();
   setText(els.homeState, home ? "Saved" : "Not set");
+  updateMapViewButtons();
 }
 
 function savedHome() {
@@ -919,6 +982,9 @@ function bindEvents() {
     state.choiceOffset += 1;
     refreshPlan();
   });
+  els.viewBus?.addEventListener("click", focusBusView);
+  els.viewRoute?.addEventListener("click", focusRouteView);
+  els.viewMe?.addEventListener("click", focusMeView);
   document.querySelectorAll(".step[data-focus]").forEach((step) => {
     step.addEventListener("click", () => focusPlanPoint(step.dataset.focus));
   });
