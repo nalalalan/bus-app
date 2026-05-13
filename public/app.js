@@ -74,6 +74,13 @@ let busMarker;
 let planTimer;
 let liveTimer;
 let destinationTimer;
+let busRenderState = null;
+let lastBusFrameMs = 0;
+
+const BUS_ESTIMATE_MAX_MS = 45 * 1000;
+const BUS_LIVE_POLL_MS = 1000;
+const METERS_PER_MILE = 1609.344;
+const EARTH_RADIUS_METERS = 6371000;
 
 function api(path) {
   return fetch(path, { cache: "no-store" }).then(async (response) => {
@@ -106,13 +113,49 @@ function formatWalk(seconds) {
 
 function haversineMeters(a, b) {
   if (!a || !b) return Infinity;
-  const radius = 6371000;
-  const lat1 = a.lat * Math.PI / 180;
-  const lat2 = b.lat * Math.PI / 180;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
+  const dLat = toRadians(b.lat - a.lat);
+  const dLng = toRadians(b.lng - a.lng);
   const x = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 2 * radius * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+function toRadians(degrees) {
+  return Number(degrees) * Math.PI / 180;
+}
+
+function toDegrees(radians) {
+  return Number(radians) * 180 / Math.PI;
+}
+
+function destinationPoint(start, meters, bearingDegrees) {
+  const distance = Number(meters);
+  const bearing = toRadians(bearingDegrees);
+  if (!start || !Number.isFinite(distance) || !Number.isFinite(bearing)) return start;
+  const lat1 = toRadians(start.lat);
+  const lng1 = toRadians(start.lng);
+  const angularDistance = distance / EARTH_RADIUS_METERS;
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(angularDistance)
+      + Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(bearing)
+  );
+  const lng2 = lng1 + Math.atan2(
+    Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(lat1),
+    Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2)
+  );
+  return {
+    lat: toDegrees(lat2),
+    lng: ((toDegrees(lng2) + 540) % 360) - 180
+  };
+}
+
+function pointBetween(from, to, ratio) {
+  const t = Math.max(0, Math.min(1, Number(ratio) || 0));
+  return {
+    lat: from.lat + (to.lat - from.lat) * t,
+    lng: from.lng + (to.lng - from.lng) * t
+  };
 }
 
 function setText(element, value) {
@@ -361,25 +404,95 @@ function selectedVehicleSample() {
   return first.done ? null : first.value;
 }
 
-function interpolatedVehicle(sample) {
+function vectorEstimatedPoint(current, previous, ageMs) {
+  if (!previous?.sampledAt || !Number.isFinite(previous.lat) || !Number.isFinite(previous.lng)) return null;
+  const dt = Math.max(1, current.sampledAt - previous.sampledAt);
+  const movedMeters = haversineMeters(previous, current);
+  if (movedMeters < 6) return null;
+  const scale = Math.min(1.5, ageMs / dt);
+  return {
+    lat: current.lat + (current.lat - previous.lat) * scale,
+    lng: current.lng + (current.lng - previous.lng) * scale
+  };
+}
+
+function estimatedVehiclePosition(sample, now = Date.now()) {
   if (!sample?.current) return null;
   const current = sample.current;
   const previous = sample.previous;
-  if (!previous) return current;
-  const dt = Math.max(1, current.sampledAt - previous.sampledAt);
-  const t = Math.max(0, Math.min(1.2, (Date.now() - current.sampledAt) / dt));
+  if (!Number.isFinite(current.lat) || !Number.isFinite(current.lng)) return null;
+  const ageMs = Math.max(0, now - (current.sampledAt || now));
+  const speedMps = Math.max(0, Number(current.speedMph || 0) * METERS_PER_MILE / 3600);
+  let point = { lat: current.lat, lng: current.lng };
+  let positionMode = ageMs > BUS_ESTIMATE_MAX_MS ? "stale" : "live";
+
+  if (ageMs > 1000 && ageMs <= BUS_ESTIMATE_MAX_MS) {
+    if (speedMps > 0.45 && Number.isFinite(Number(current.bearing))) {
+      point = destinationPoint(current, speedMps * (ageMs / 1000), Number(current.bearing));
+      positionMode = "estimated";
+    } else if (Number(current.speedMph || 0) >= 1) {
+      const vectorPoint = vectorEstimatedPoint(current, previous, ageMs);
+      if (vectorPoint) {
+        point = vectorPoint;
+        positionMode = "estimated";
+      }
+    }
+  }
+
   return {
     ...current,
-    lat: current.lat + (current.lat - previous.lat) * Math.max(0, t - 1) * 0.35,
-    lng: current.lng + (current.lng - previous.lng) * Math.max(0, t - 1) * 0.35
+    ...point,
+    ageSeconds: Math.floor(ageMs / 1000),
+    positionMode,
+    speedMps
+  };
+}
+
+function smoothVehiclePosition(vehicle, now = Date.now()) {
+  if (!vehicle) return null;
+  const id = String(vehicle.id || "bus");
+  const target = { lat: vehicle.lat, lng: vehicle.lng };
+  if (!Number.isFinite(target.lat) || !Number.isFinite(target.lng)) return null;
+
+  if (!busRenderState || busRenderState.id !== id) {
+    busRenderState = { id, lat: target.lat, lng: target.lng, renderedAt: now };
+    return { ...vehicle, displayEstimated: vehicle.positionMode !== "live" };
+  }
+
+  const rendered = { lat: busRenderState.lat, lng: busRenderState.lng };
+  const distance = haversineMeters(rendered, target);
+  const elapsedSeconds = Math.max(0.016, (now - busRenderState.renderedAt) / 1000);
+  if (!Number.isFinite(distance) || distance > 1800) {
+    busRenderState = { id, lat: target.lat, lng: target.lng, renderedAt: now };
+    return { ...vehicle, displayEstimated: vehicle.positionMode !== "live" };
+  }
+
+  const maxMetersPerSecond = Math.max(10, Math.min(90, (vehicle.speedMps || 3) * 4 + 8));
+  const stepMeters = Math.max(2, maxMetersPerSecond * elapsedSeconds);
+  const ratio = distance <= stepMeters ? 1 : stepMeters / distance;
+  const next = pointBetween(rendered, target, ratio);
+  busRenderState = { id, lat: next.lat, lng: next.lng, renderedAt: now };
+
+  return {
+    ...vehicle,
+    ...next,
+    displayEstimated: vehicle.positionMode !== "live" || ratio < 1
   };
 }
 
 function animateBusMarker() {
-  const vehicle = interpolatedVehicle(selectedVehicleSample());
+  const now = Date.now();
+  if (now - lastBusFrameMs < 120) {
+    requestAnimationFrame(animateBusMarker);
+    return;
+  }
+  lastBusFrameMs = now;
+  const vehicle = smoothVehiclePosition(estimatedVehiclePosition(selectedVehicleSample(), now), now);
   if (vehicle && Number.isFinite(vehicle.lat) && Number.isFinite(vehicle.lng)) {
     const label = String(state.planResult?.plan?.route?.id || state.routeId || "B").slice(0, 3);
-    busMarker = ensureMarker(busMarker, [vehicle.lat, vehicle.lng], pinIcon("bus", label, "bus"), "Live bus");
+    const modeClass = vehicle.positionMode === "stale" ? "bus stale-bus" : vehicle.displayEstimated ? "bus estimated-bus" : "bus";
+    const title = vehicle.positionMode === "stale" ? "Stale bus position" : vehicle.displayEstimated ? "Estimated live bus position" : "Live bus";
+    busMarker = ensureMarker(busMarker, [vehicle.lat, vehicle.lng], pinIcon(modeClass, label, "bus"), title);
   }
   requestAnimationFrame(animateBusMarker);
 }
@@ -474,14 +587,22 @@ function leaveByStatus(plan) {
   return statusLine(plan);
 }
 
+function routeName(route) {
+  const name = String(route?.name || "").trim();
+  if (!name || name === `Route ${route?.id}`) return `Route ${route?.id || state.routeId || "--"}`;
+  return `Route ${route.id} - ${name}`;
+}
+
 function vehicleStateText(plan) {
   const vehicle = plan?.vehicle;
-  const live = selectedVehicleSample()?.current || vehicle;
+  const live = estimatedVehiclePosition(selectedVehicleSample()) || vehicle;
   if (!live) return "No live vehicle matched";
-  const ageSeconds = live.sampledAt ? Math.floor((Date.now() - live.sampledAt) / 1000) : 0;
-  const freshness = ageSeconds > 45 ? "stale" : "live";
+  const ageSeconds = Number.isFinite(live.ageSeconds)
+    ? live.ageSeconds
+    : live.sampledAt ? Math.floor((Date.now() - live.sampledAt) / 1000) : 0;
+  const freshness = live.positionMode === "stale" ? "stale" : live.positionMode === "estimated" ? "estimated" : "live";
   const movement = Number(live.speedMph) < 1 ? "stopped / light" : `${Math.round(live.speedMph)} mph`;
-  return `Bus ${live.equipment || live.id} - ${freshness} - ${movement} - ${live.delay || "schedule state"}`;
+  return `Bus ${live.equipment || live.id} - ${freshness} ${ageSeconds}s - ${movement} - ${live.delay || "schedule state"}`;
 }
 
 function updateTripChoice() {
@@ -528,9 +649,11 @@ function renderFacts() {
   setText(els.busArrival, formatTime(plan.timings.busArrivalMs));
   setText(
     els.busArrivalSub,
-    plan.prediction ? `B marker; WRTA live, schedule ${formatTime(plan.timings.scheduledBusArrivalMs)}` : "B marker; Ride Guide schedule"
+    plan.prediction
+      ? `B marker; to ${plan.route.headsign}; WRTA live, schedule ${formatTime(plan.timings.scheduledBusArrivalMs)}`
+      : `B marker; to ${plan.route.headsign}; Ride Guide schedule`
   );
-  setText(els.busTarget, `Route ${plan.route.id} to ${plan.route.headsign}`);
+  setText(els.busTarget, routeName(plan.route));
   setText(els.busLiveState, vehicleStateText(plan));
   setText(els.pullCord, formatTime(plan.timings.pullCordAtMs));
   setText(els.pullCordSub, plan.previousStop
@@ -539,7 +662,7 @@ function renderFacts() {
   setText(els.exitStop, `${formatTime(plan.timings.exitArrivalMs)} - ${plan.exitStop.name}`);
   setText(els.exitSub, `Red X marker; ${formatMiles(plan.walking.fromExit.distanceMeters)} from ${plan.destination.name}`);
   setText(els.stopsRemaining, remainingStopsText(plan));
-  setText(els.routeStatus, `Route ${plan.route.id} - ${plan.route.headsign}`);
+  setText(els.routeStatus, routeName(plan.route));
   setText(els.sourceState, (result.sources || []).map((source) => `${source.name}: ${source.ok ? "OK" : "blocked"}`).join(" / "));
   updateTripChoice();
 }
@@ -610,11 +733,23 @@ function startLocationWatch() {
 async function loadRoute(routeId = state.routeId) {
   const selectedRouteId = String(routeId || state.routeId || "").trim();
   if (!selectedRouteId) return;
+  const previousRouteId = state.routeId;
   state.routeId = selectedRouteId;
+  if (previousRouteId && previousRouteId !== selectedRouteId) {
+    state.vehicleSamples.clear();
+    busRenderState = null;
+    if (busMarker) {
+      busMarker.remove();
+      busMarker = null;
+    }
+  }
   try {
     state.routeData = await api(`/api/route?routeId=${encodeURIComponent(state.routeId)}`);
     renderRoute();
-    setText(els.routeStatus, `Route ${state.routeData.routeId}`);
+    setText(els.routeStatus, routeName({
+      id: state.routeData.routeId,
+      name: state.routeData.line?.longName || state.routeData.line?.shortName || ""
+    }));
   } catch (error) {
     setText(els.routeStatus, `Route ${state.routeId} blocked`);
     setText(els.sourceState, error.message);
@@ -730,7 +865,7 @@ async function boot() {
   startLocationWatch();
   useSavedHomeIfNeeded();
   refreshLive();
-  setInterval(refreshLive, 8000);
+  liveTimer = setInterval(refreshLive, BUS_LIVE_POLL_MS);
   setInterval(refreshPlan, 25000);
   requestAnimationFrame(animateBusMarker);
 }

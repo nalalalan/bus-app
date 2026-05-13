@@ -518,7 +518,7 @@ async function getLiveVehicles(routeId = DEFAULT_ROUTE_ID, lineId = null) {
   const line = lineId ? { lineId } : await resolveWrtaLine(routeId);
   const checkedAt = new Date().toISOString();
   try {
-    const data = await swiv("/topo/vehicules", {}, 8 * 1000);
+    const data = await swiv("/topo/vehicules", {}, 1000);
     const vehicles = (data?.vehicule || [])
       .filter((vehicle) => Number(vehicle.conduite?.idLigne) === Number(line.lineId))
       .map((vehicle) => ({
@@ -908,6 +908,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
             route: {
               id: route.routeId,
               lineId: route.lineId,
+              name: route.line?.longName || route.line?.shortName || `Route ${route.routeId}`,
               headsign: trip.headsign,
               directionId: trip.directionId,
               shapeId: trip.shapeId,
@@ -1032,6 +1033,7 @@ async function handleApi(req, res, requestUrl) {
     sendJson(res, 200, {
       routeId: route.routeId,
       lineId: route.lineId,
+      line: route.line,
       generatedAt: route.generatedAt,
       destinations: route.destinations,
       stops: route.stops,

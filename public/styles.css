@@ -394,6 +394,15 @@ h1 {
   background: var(--route);
 }
 
+.pin.estimated-bus {
+  box-shadow: 0 0 0 5px rgba(199, 93, 50, .18), 0 4px 12px rgba(40, 30, 20, .25);
+}
+
+.pin.stale-bus {
+  background: var(--red);
+  opacity: .72;
+}
+
 .pin.user {
   background: var(--blue);
 }
