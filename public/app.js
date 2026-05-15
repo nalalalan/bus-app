@@ -51,13 +51,13 @@ const LOCATIONS = [
 ];
 
 const els = {
-  fitAll: document.getElementById("fitAll"),
-  fitBuses: document.getElementById("fitBuses"),
-  fitLocations: document.getElementById("fitLocations"),
   statusText: document.getElementById("statusText"),
   routeList: document.getElementById("routeList"),
   locationList: document.getElementById("locationList"),
   busList: document.getElementById("busList"),
+  selectedStopName: document.getElementById("selectedStopName"),
+  selectedStopDetail: document.getElementById("selectedStopDetail"),
+  arrivalList: document.getElementById("arrivalList"),
   updatedAt: document.getElementById("updatedAt")
 };
 
@@ -72,7 +72,7 @@ const routeState = new Map(ROUTES.map((routeId) => [routeId, {
 }]));
 const vehicleSamples = new Map();
 const busMarkers = new Map();
-const locationMarkers = [];
+const locationMarkers = new Map();
 
 const BUS_POLL_MS = 10000;
 const BUS_RENDER_MS = 1000;
@@ -88,6 +88,11 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", {
 let map;
 let refreshTimer;
 let renderTimer;
+let currentLocation = null;
+let currentMarker = null;
+let selectedLocationId = null;
+let selectedRouteId = "";
+let selectedStopMarker = null;
 
 function api(path) {
   return fetch(path, { cache: "no-store" }).then(async (response) => {
@@ -144,22 +149,23 @@ function pinIcon(kind, label, color = "#555555") {
 }
 
 function renderLocations() {
-  for (const marker of locationMarkers) marker.remove();
-  locationMarkers.length = 0;
+  for (const marker of locationMarkers.values()) marker.remove();
+  locationMarkers.clear();
 
   for (const location of LOCATIONS) {
     const marker = L.marker([location.lat, location.lng], {
-      icon: pinIcon("location", location.label, "#222222"),
+      icon: pinIcon(location.id === selectedLocationId ? "location selected" : "location", location.label, "#222222"),
       title: location.name
     }).bindTooltip(`${escapeHtml(location.name)}<br>${escapeHtml(location.address)}`, {
       direction: "top",
       offset: [0, -12]
     }).addTo(map);
-    locationMarkers.push(marker);
+    marker.on("click", () => selectLocation(location.id));
+    locationMarkers.set(location.id, marker);
   }
 
   els.locationList.innerHTML = LOCATIONS.map((location) => (
-    `<button class="location-row" type="button" data-location="${escapeHtml(location.id)}">
+    `<button class="location-row${location.id === selectedLocationId ? " selected" : ""}" type="button" data-location="${escapeHtml(location.id)}">
       <strong>${escapeHtml(location.name)}</strong>
       <span>${escapeHtml(location.address)}</span>
     </button>`
@@ -171,11 +177,11 @@ function renderRoutes() {
     const state = routeState.get(routeId);
     const count = state?.vehicles?.length || 0;
     const status = state?.ok ? `${count} live` : "blocked";
-    return `<div class="route-row">
+    return `<button class="route-row${routeId === selectedRouteId ? " selected" : ""}" type="button" data-route="${escapeHtml(routeId)}">
       <span class="route-swatch" style="--route-color:${routeColor(routeId)}"></span>
       <strong>Route ${escapeHtml(routeId)}</strong>
       <span>${escapeHtml(status)}</span>
-    </div>`;
+    </button>`;
   }).join("");
 }
 
@@ -202,6 +208,30 @@ function renderBusList() {
     }
   }
   els.busList.innerHTML = rows.join("");
+}
+
+function renderSelectedStop(data = null) {
+  if (!data?.stop) {
+    els.selectedStopName.textContent = selectedLocationId ? "Loading stop" : "Select a location";
+    els.selectedStopDetail.textContent = "--";
+    els.arrivalList.innerHTML = "";
+    return;
+  }
+
+  const stop = data.stop;
+  const route = data.route;
+  const location = data.location;
+  const distanceFeet = Math.round(Number(stop.distanceMeters || 0) * 3.28084);
+  els.selectedStopName.textContent = stop.name || "Closest stop";
+  els.selectedStopDetail.textContent = `Route ${route?.id || "--"} - ${distanceFeet} ft from ${location?.name || "location"}`;
+  els.arrivalList.innerHTML = (data.arrivals || []).length
+    ? data.arrivals.map((arrival) => (
+      `<div class="arrival-row">
+        <strong>${escapeHtml(timeFormatter.format(new Date(arrival.predictedMs)))}</strong>
+        <span>Route ${escapeHtml(arrival.routeId)} to ${escapeHtml(arrival.destination || "destination")} - ${escapeHtml(arrival.minutes || "")}</span>
+      </div>`
+    )).join("")
+    : `<div class="arrival-row muted"><strong>No WRTA times</strong><span>${escapeHtml(stop.name || "")}</span></div>`;
 }
 
 function setStatus(text) {
@@ -300,6 +330,14 @@ function busTitle(vehicle) {
   return `Route ${vehicle.routeId} bus ${vehicle.equipment || vehicle.id}${destination} - ${speed} mph - ${stale}`;
 }
 
+function focusVehicle(key) {
+  const vehicle = estimatedVehicle(vehicleSamples.get(key));
+  if (!vehicle || !Number.isFinite(vehicle.lat) || !Number.isFinite(vehicle.lng)) return;
+  map.setView([vehicle.lat, vehicle.lng], 17, { animate: true });
+  const marker = busMarkers.get(key);
+  if (marker) marker.openTooltip();
+}
+
 function renderBuses() {
   const active = new Set();
   for (const [key, sample] of vehicleSamples.entries()) {
@@ -317,13 +355,15 @@ function renderBuses() {
       existing.setIcon(icon);
       existing.setTooltipContent(escapeHtml(busTitle(vehicle)));
     } else {
-      busMarkers.set(key, L.marker(latLng, {
+      const marker = L.marker(latLng, {
         icon,
         title: busTitle(vehicle)
       }).bindTooltip(escapeHtml(busTitle(vehicle)), {
         direction: "top",
         offset: [0, -14]
-      }).addTo(map));
+      }).addTo(map);
+      marker.on("click", () => focusVehicle(key));
+      busMarkers.set(key, marker);
     }
   }
 
@@ -345,6 +385,19 @@ function fitBounds(points, fallbackZoom = 12) {
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
 }
 
+function updateRouteStyles() {
+  for (const [routeId, layer] of routeLayers.entries()) {
+    const selected = selectedRouteId && routeId === selectedRouteId;
+    layer.setStyle({
+      color: routeColor(routeId),
+      weight: selected ? 8 : 4,
+      opacity: selectedRouteId ? (selected ? 0.95 : 0.28) : 0.74
+    });
+    if (selected) layer.bringToFront();
+  }
+  renderRoutes();
+}
+
 function fitAll() {
   const points = [...LOCATIONS];
   for (const layer of routeLayers.values()) {
@@ -360,13 +413,107 @@ function fitAll() {
   fitBounds(points, 11);
 }
 
-function fitBuses() {
-  const points = [...vehicleSamples.values()].map(estimatedVehicle).filter(Boolean);
+function fitBuses(routeId = "") {
+  const points = [...vehicleSamples.values()]
+    .filter((sample) => !routeId || sample.current?.routeId === routeId)
+    .map(estimatedVehicle)
+    .filter(Boolean);
   fitBounds(points, 12);
 }
 
 function fitLocations() {
   fitBounds(LOCATIONS, 12);
+}
+
+function fitRouteOrBuses(routeId) {
+  const busPoints = [...vehicleSamples.values()]
+    .filter((sample) => sample.current?.routeId === routeId)
+    .map(estimatedVehicle)
+    .filter(Boolean);
+  selectedRouteId = routeId;
+  updateRouteStyles();
+  if (busPoints.length === 1) {
+    map.setView([busPoints[0].lat, busPoints[0].lng], 17, { animate: true });
+    return;
+  }
+  if (busPoints.length > 1) {
+    fitBounds(busPoints, 13);
+    return;
+  }
+  const routeBounds = routeLayers.get(routeId)?.getBounds?.();
+  if (routeBounds?.isValid?.()) map.fitBounds(routeBounds, { padding: [32, 32], maxZoom: 14 });
+}
+
+function renderCurrentLocation() {
+  if (!currentLocation) return;
+  const latLng = [currentLocation.lat, currentLocation.lng];
+  if (currentMarker) {
+    currentMarker.setLatLng(latLng);
+    return;
+  }
+  currentMarker = L.marker(latLng, {
+    icon: pinIcon("current", "me", "#375f8f"),
+    title: "Current location"
+  }).bindTooltip("Current location", {
+    direction: "top",
+    offset: [0, -12]
+  }).addTo(map);
+}
+
+function startLocationWatch() {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.watchPosition((position) => {
+    currentLocation = {
+      lat: position.coords.latitude,
+      lng: position.coords.longitude
+    };
+    renderCurrentLocation();
+  }, () => {}, {
+    enableHighAccuracy: true,
+    maximumAge: 6000,
+    timeout: 16000
+  });
+}
+
+function focusSelectedLocation(location, stop = null) {
+  const points = [location, currentLocation].filter(Boolean);
+  if (stop) points.push(stop);
+  fitBounds(points, 15);
+}
+
+async function selectLocation(locationId) {
+  const location = LOCATIONS.find((item) => item.id === locationId);
+  if (!location) return;
+  selectedLocationId = location.id;
+  renderLocations();
+  renderSelectedStop();
+  focusSelectedLocation(location);
+  setStatus(`Loading ${location.name}`);
+
+  try {
+    const data = await api(`/api/location-arrivals?locationId=${encodeURIComponent(location.id)}&now=${Date.now()}`);
+    selectedRouteId = data.route?.id || "";
+    updateRouteStyles();
+    renderSelectedStop(data);
+    if (selectedStopMarker) selectedStopMarker.remove();
+    if (data.stop && Number.isFinite(data.stop.lat) && Number.isFinite(data.stop.lng)) {
+      selectedStopMarker = L.marker([data.stop.lat, data.stop.lng], {
+        icon: pinIcon("stop", "S", routeColor(selectedRouteId)),
+        title: data.stop.name || "Closest stop"
+      }).bindTooltip(`${escapeHtml(data.stop.name || "Closest stop")}<br>Route ${escapeHtml(selectedRouteId || "--")}`, {
+        direction: "top",
+        offset: [0, -12]
+      }).addTo(map);
+      selectedStopMarker.on("click", () => selectedStopMarker.openTooltip());
+    }
+    focusSelectedLocation(location, data.stop);
+    setStatus(`${location.name} - Route ${selectedRouteId || "--"}`);
+  } catch (error) {
+    els.selectedStopName.textContent = "Stop unavailable";
+    els.selectedStopDetail.textContent = error.message;
+    els.arrivalList.innerHTML = "";
+    setStatus("Stop unavailable");
+  }
 }
 
 async function loadRoute(routeId) {
@@ -389,6 +536,7 @@ async function loadRoute(routeId) {
     ok: true,
     error: ""
   });
+  updateRouteStyles();
 }
 
 async function loadLive(routeId) {
@@ -450,20 +598,20 @@ async function refreshLive() {
 }
 
 function bindEvents() {
-  els.fitAll.addEventListener("click", fitAll);
-  els.fitBuses.addEventListener("click", fitBuses);
-  els.fitLocations.addEventListener("click", fitLocations);
   els.locationList.addEventListener("click", (event) => {
     const row = event.target.closest("[data-location]");
     if (!row) return;
-    const location = LOCATIONS.find((item) => item.id === row.dataset.location);
-    if (location) map.setView([location.lat, location.lng], 17, { animate: true });
+    selectLocation(row.dataset.location);
+  });
+  els.routeList.addEventListener("click", (event) => {
+    const row = event.target.closest("[data-route]");
+    if (!row) return;
+    fitRouteOrBuses(row.dataset.route);
   });
   els.busList.addEventListener("click", (event) => {
     const row = event.target.closest("[data-vehicle]");
     if (!row) return;
-    const vehicle = estimatedVehicle(vehicleSamples.get(row.dataset.vehicle));
-    if (vehicle) map.setView([vehicle.lat, vehicle.lng], 17, { animate: true });
+    focusVehicle(row.dataset.vehicle);
   });
 }
 
@@ -473,6 +621,8 @@ async function boot() {
   renderLocations();
   renderRoutes();
   renderBusList();
+  renderSelectedStop();
+  startLocationWatch();
   await loadAllRoutes();
   await refreshLive();
   refreshTimer = setInterval(refreshLive, BUS_POLL_MS);

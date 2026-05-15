@@ -751,6 +751,83 @@ async function stopPredictions(stop, headsign, nowMs, plannedArrivalMs, lineId) 
   }
 }
 
+function formatMinutesFromNow(ms, nowMs) {
+  const minutes = Math.round((Number(ms) - Number(nowMs)) / 60000);
+  if (!Number.isFinite(minutes)) return "";
+  if (minutes <= 0) return "due";
+  if (minutes === 1) return "1 min";
+  return `${minutes} min`;
+}
+
+async function stopArrivals(stop, routeEntries, nowMs = Date.now()) {
+  if (!stop?.swivId) return [];
+  const byLineId = new Map(routeEntries.map((entry) => [Number(entry.route.lineId), entry.route]));
+  try {
+    const data = await swiv(`/horaires/pta/${stop.swivId}`, {}, 10 * 1000);
+    const today = localDateString(nowMs);
+    const rows = [];
+    for (const line of data?.listeHoraires || []) {
+      const route = byLineId.get(Number(line.idLigne));
+      if (!route) continue;
+      for (const destination of line.destination || []) {
+        for (const item of destination.horaires || []) {
+          const scheduledMs = secondsAfterMidnightToMs(today, item.horaire);
+          const predictedMs = secondsAfterMidnightToMs(today, item.horaireApplicable ?? item.horaire);
+          if (predictedMs < nowMs - 2 * 60 * 1000) continue;
+          rows.push({
+            id: item.idHoraire,
+            routeId: route.routeId,
+            routeName: route.line?.longName || route.line?.shortName || `Route ${route.routeId}`,
+            destination: destination.libelle || "",
+            scheduledMs,
+            predictedMs,
+            minutes: formatMinutesFromNow(predictedMs, nowMs),
+            source: "WRTA stop times"
+          });
+        }
+      }
+    }
+    return rows
+      .sort((a, b) => a.predictedMs - b.predictedMs)
+      .slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+
+async function closestTrackedStop(point, routeIds = TRACKED_ROUTE_IDS, nowMs = Date.now()) {
+  const routes = await Promise.all(routeIds.map((routeId) => getRouteData(routeId)));
+  let best = null;
+  for (const route of routes) {
+    for (const stop of route.stops || []) {
+      if (!Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) continue;
+      const distanceMeters = haversineMeters(point, stop);
+      if (!best || distanceMeters < best.distanceMeters) {
+        best = {
+          route,
+          stop,
+          distanceMeters
+        };
+      }
+    }
+  }
+  if (!best) return null;
+  const arrivals = await stopArrivals(best.stop, routes.map((route) => ({ route })), nowMs);
+  return {
+    route: {
+      id: best.route.routeId,
+      lineId: best.route.lineId,
+      name: best.route.line?.longName || best.route.line?.shortName || `Route ${best.route.routeId}`,
+      color: best.route.line?.color || ""
+    },
+    stop: {
+      ...compactStop(best.stop),
+      distanceMeters: best.distanceMeters
+    },
+    arrivals
+  };
+}
+
 function planState(nowMs, leaveByMs, standByMs, busArrivalMs, walkSeconds) {
   const arrivalIfLeavingNow = nowMs + walkSeconds * 1000;
   if (nowMs <= leaveByMs) return "on_time";
@@ -1187,6 +1264,43 @@ async function handleApi(req, res, requestUrl) {
     const routeId = requestUrl.searchParams.get("routeId") || requestUrl.searchParams.get("route") || DEFAULT_ROUTE_ID;
     const live = await getLiveVehicles(routeId);
     sendJson(res, live.status.ok ? 200 : 502, live);
+    return true;
+  }
+
+  if (requestUrl.pathname === "/api/location-arrivals") {
+    const locationId = requestUrl.searchParams.get("locationId") || requestUrl.searchParams.get("location") || "";
+    const lat = optionalNumber(requestUrl.searchParams.get("lat"));
+    const lng = optionalNumber(requestUrl.searchParams.get("lng"));
+    const destination = savedDestinationByQuery(locationId)
+      || (Number.isFinite(lat) && Number.isFinite(lng)
+        ? {
+            id: locationId || "custom",
+            name: requestUrl.searchParams.get("name") || "Selected location",
+            label: requestUrl.searchParams.get("name") || "Selected location",
+            address: "",
+            lat,
+            lng
+          }
+        : null);
+    if (!destination || !Number.isFinite(destination.lat) || !Number.isFinite(destination.lng)) {
+      sendJson(res, 400, { ok: false, error: "locationId or lat,lng is required" });
+      return true;
+    }
+    const now = Number(requestUrl.searchParams.get("now") || Date.now());
+    const result = await closestTrackedStop(
+      { lat: destination.lat, lng: destination.lng },
+      TRACKED_ROUTE_IDS,
+      Number.isFinite(now) ? now : Date.now()
+    );
+    sendJson(res, result ? 200 : 404, {
+      ok: Boolean(result),
+      location: destination,
+      ...result,
+      sources: [
+        sourceStatus("WRTA nearest tracked stop", Boolean(result)),
+        sourceStatus("WRTA stop times", Boolean(result?.arrivals?.length), { count: result?.arrivals?.length || 0 })
+      ]
+    });
     return true;
   }
 

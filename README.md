@@ -12,5 +12,6 @@ Fixed location pins:
 
 Sources:
 - WRTA SWIV live vehicle data.
+- WRTA SWIV stop-arrival data for the closest tracked stop after a location is selected.
 - WRTA route geometry through the existing Ride Guide route endpoints.
 - OpenStreetMap tiles.

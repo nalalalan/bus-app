@@ -31,9 +31,6 @@
     <main class="tracker">
       <section class="map-panel" aria-label="WRTA live map">
         <div class="map-toolbar">
-          <button id="fitAll" type="button">All</button>
-          <button id="fitBuses" type="button">Buses</button>
-          <button id="fitLocations" type="button">Locations</button>
           <span id="statusText">Loading</span>
         </div>
         <div id="map" aria-label="Routes 2, 4, 3, and 31"></div>
@@ -41,13 +38,20 @@
 
       <aside class="side-panel" aria-label="Tracker state">
         <section class="panel-section">
-          <p class="eyebrow">Routes</p>
-          <div id="routeList" class="route-list"></div>
+          <p class="eyebrow">Locations</p>
+          <div id="locationList" class="location-list"></div>
+        </section>
+
+        <section class="panel-section selected-panel">
+          <p class="eyebrow">Closest stop</p>
+          <strong id="selectedStopName">Select a location</strong>
+          <span id="selectedStopDetail">--</span>
+          <div id="arrivalList" class="arrival-list"></div>
         </section>
 
         <section class="panel-section">
-          <p class="eyebrow">Locations</p>
-          <div id="locationList" class="location-list"></div>
+          <p class="eyebrow">Routes</p>
+          <div id="routeList" class="route-list"></div>
         </section>
 
         <section class="panel-section">
