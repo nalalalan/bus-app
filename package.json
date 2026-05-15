@@ -2,7 +2,7 @@
   "name": "bus-live-aolabs",
   "version": "0.1.0",
   "private": true,
-  "description": "Personal WRTA bus tracker with Route 31 to Chipotle as the saved first trip.",
+  "description": "Minimal WRTA live tracker for routes 2, 4, 3, and 31.",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",

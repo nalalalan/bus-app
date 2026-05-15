@@ -6,6 +6,7 @@ const port = Number(process.env.PORT || 3000);
 const publicDir = path.join(__dirname, "public");
 
 const DEFAULT_ROUTE_ID = "31";
+const TRACKED_ROUTE_IDS = ["2", "4", "3", "31"];
 const TIME_ZONE = "America/New_York";
 const RIDE_GUIDE_DATASET = "worcester-regional-transit-authority-ma-us";
 const RIDE_GUIDE_CLIENT = "rideguide";
@@ -26,6 +27,33 @@ const MAX_AUTO_EXIT_CANDIDATES = 4;
 const MAX_AUTO_DEPARTURES_PER_STOP = 5;
 
 const destinations = {
+  william: {
+    id: "william",
+    name: "96 William St",
+    label: "96 William Street",
+    address: "96 William Street, Worcester, MA",
+    lat: 42.2682067,
+    lng: -71.8141609,
+    defaultRouteId: "31"
+  },
+  alden: {
+    id: "alden",
+    name: "Alden Hall",
+    label: "Alden Hall",
+    address: "100 Institute Road, Worcester, MA",
+    lat: 42.2743150,
+    lng: -71.8084567,
+    defaultRouteId: "31"
+  },
+  union: {
+    id: "union",
+    name: "Union Station",
+    label: "Union Station",
+    address: "2 Washington Square, Worcester, MA",
+    lat: 42.2613806,
+    lng: -71.7952265,
+    defaultRouteId: "3"
+  },
   chipotle: {
     id: "chipotle",
     name: "Chipotle",
@@ -34,6 +62,24 @@ const destinations = {
     lat: 42.281927,
     lng: -71.8082589,
     defaultRouteId: "31"
+  },
+  coldstone: {
+    id: "coldstone",
+    name: "Cold Stone",
+    label: "Cold Stone",
+    address: "531 Main Street, Suite #103, Worcester, MA",
+    lat: 42.2618181,
+    lng: -71.8028624,
+    defaultRouteId: "3"
+  },
+  blackstone: {
+    id: "blackstone",
+    name: "Blackstone Theaters",
+    label: "Blackstone Theaters",
+    address: "70 Worcester-Providence Turnpike, Millbury, MA",
+    lat: 42.1967955,
+    lng: -71.7776713,
+    defaultRouteId: "4"
   }
 };
 
@@ -1074,6 +1120,7 @@ async function handleApi(req, res, requestUrl) {
     sendJson(res, 200, {
       ok: true,
       defaultRoute: DEFAULT_ROUTE_ID,
+      trackedRoutes: TRACKED_ROUTE_IDS,
       destinations: Object.values(destinations),
       checkedAt: new Date().toISOString()
     });
