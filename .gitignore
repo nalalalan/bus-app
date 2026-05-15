@@ -3,3 +3,4 @@ node_modules/
 _server.log
 _server.err.log
 *.png
+!public/assets/*.png
