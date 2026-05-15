@@ -6,38 +6,41 @@
     <title>bus</title>
     <meta name="description" content="Minimal WRTA live tracker for routes 2, 4, 3, and 31.">
     <link rel="canonical" href="https://bus.aolabs.io/">
-    <meta property="og:title" content="WRTA bus tracker">
+    <meta property="og:title" content="bus">
     <meta property="og:description" content="Routes 2, 4, 3, and 31 with live buses and fixed location pins.">
     <meta property="og:url" content="https://bus.aolabs.io/">
     <meta property="og:type" content="website">
-    <link rel="icon" href="/icon.svg" type="image/svg+xml">
-    <link rel="apple-touch-icon" href="/apple-touch-icon.svg">
+    <link rel="icon" href="https://aolabs.io/favicon.svg?v=20260515-ao-disc-a" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="https://aolabs.io/marks/ao-ink.svg?v=20260515-ao-disc-a">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="https://aolabs.io/suite-header.css?v=20260515-ao-disc-a">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <header class="suite-topbar" aria-label="bus navigation">
-        <div class="suite-brand-cluster">
-          <a class="suite-ao-home" href="https://aolabs.io/" aria-label="aolabs.io">
-            <img src="https://aolabs.io/marks/ao-ink.svg?v=20260515-ao-disc-a" alt="">
-          </a>
-          <a class="suite-app-brand" href="/" aria-label="bus home">
-            <img class="suite-app-mark" src="https://aolabs.io/icons/bus.svg?v=20260515-bus" alt="">
-            <span class="suite-app-name">bus</span>
-          </a>
-        </div>
-          <div class="suite-topbar-actions" aria-label="bus actions">
-            <a href="https://swiv.wrta.cadavl.com/SWIV/WRTA" target="_blank" rel="noreferrer">wrta source</a>
-          </div>
-      </header>
+      <div class="suite-brand-cluster">
+        <a class="suite-ao-home" href="https://aolabs.io/" aria-label="aolabs.io">
+          <img src="https://aolabs.io/marks/ao-ink.svg?v=20260515-ao-disc-a" alt="">
+        </a>
+        <a class="suite-app-brand" href="/" aria-label="bus home">
+          <img class="suite-app-mark" src="https://aolabs.io/icons/bus.svg?v=20260515-bus" alt="">
+          <span class="suite-app-name">bus</span>
+        </a>
+      </div>
+      <div class="suite-topbar-actions" aria-label="bus actions">
+        <a href="https://swiv.wrta.cadavl.com/SWIV/WRTA" target="_blank" rel="noreferrer">wrta source</a>
+      </div>
+    </header>
 
     <main class="tracker">
       <section class="map-panel" aria-label="WRTA live map">
         <div class="map-toolbar">
           <span id="statusText">Loading</span>
-          <button id="gpsButton" type="button">Use GPS</button>
+          <div class="gps-control">
+            <button id="gpsButton" type="button">Use GPS</button>
+            <span id="gpsHint" class="gps-hint" hidden></span>
+          </div>
         </div>
         <div id="map" aria-label="Routes 2, 4, 3, and 31"></div>
       </section>

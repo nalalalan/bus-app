@@ -53,6 +53,7 @@ const LOCATIONS = [
 const els = {
   statusText: document.getElementById("statusText"),
   gpsButton: document.getElementById("gpsButton"),
+  gpsHint: document.getElementById("gpsHint"),
   locationList: document.getElementById("locationList"),
   busList: document.getElementById("busList"),
   selectedStopName: document.getElementById("selectedStopName"),
@@ -100,6 +101,8 @@ let selectedArrivalData = null;
 let followVehicleKey = "";
 let gpsStatus = "GPS needed";
 let gpsRequestPromise = null;
+let gpsPermissionStatus = null;
+let locationWatchId = null;
 
 function api(path) {
   return fetch(path, { cache: "no-store" }).then(async (response) => {
@@ -155,6 +158,15 @@ function pinIcon(kind, label, color = "#555555") {
   });
 }
 
+function currentPhotoIcon() {
+  return L.divIcon({
+    className: "current-marker",
+    html: `<span class="current-photo"><img src="/assets/alan-current.png" alt=""></span>`,
+    iconSize: [46, 46],
+    iconAnchor: [23, 23]
+  });
+}
+
 function logoImg(src, alt) {
   return `<img class="place-logo" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">`;
 }
@@ -173,10 +185,15 @@ function locationGlyph(location) {
     return logoImg("/assets/chipotle-logo.svg", "Chipotle");
   }
   if (location.id === "coldstone") {
-    return logoImg("/assets/coldstone-favicon.ico", "Cold Stone");
+    return logoImg("/assets/coldstone-mark.png", "Cold Stone");
   }
   if (location.id === "blackstone") {
-    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M8 13h16l-2 15H10L8 13z" fill="currentColor"/><path d="M8 13 6 7l4-1 2 6 3-7 4 1-2 7 5-5 4 3-5 4H8z" fill="currentColor"/><path d="M12 16h2l1 9h-2l-1-9zm5 0h2l-1 9h-2l1-9z" fill="#fff"/></svg>`;
+    return `<svg class="popcorn-icon" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M9 12h14l-2 16H11L9 12z" fill="#ffffff" stroke="#171717" stroke-width="1.4" stroke-linejoin="round"/>
+      <path d="M12 14h3l.8 12H13l-1-12zm5 0h3l-1 12h-2.8L17 14z" fill="#c7342d"/>
+      <path d="M8 13c-2.2-.7-2.8-3.8-.8-5.1 1.2-.8 2.5-.5 3.2.4.1-2.3 3-3.6 4.7-2 1.2-2.8 5.2-2.8 6.4 0 1.8-1.3 4.7 0 4.7 2.3 1-.7 2.3-.6 3.2.4 1.5 1.7.5 4.2-1.7 4.7H8z" fill="#f2c94c" stroke="#171717" stroke-width="1.2" stroke-linejoin="round"/>
+      <path d="M10.6 8.7c1.1 1.8 2.6 2.7 4.3 2.6m5.5-5c-.8 2-1 3.6-.4 5m4.7-2.7c-1.4 1-2.2 2.2-2.4 3.8" fill="none" stroke="#ffffff" stroke-width="1.1" stroke-linecap="round"/>
+    </svg>`;
   }
   return `<span>${escapeHtml(location.label)}</span>`;
 }
@@ -297,8 +314,17 @@ function setStatus(text) {
 }
 
 function renderGpsButton() {
-  els.gpsButton.textContent = currentLocation?.source === "GPS" ? "GPS on" : gpsStatus === "GPS needed" ? "Use GPS" : gpsStatus;
-  els.gpsButton.classList.toggle("active", currentLocation?.source === "GPS");
+  const hasGps = currentLocation?.source === "GPS";
+  els.gpsButton.textContent = hasGps ? "GPS on" : gpsStatus === "GPS needed" ? "Use GPS" : gpsStatus;
+  els.gpsButton.classList.toggle("active", hasGps);
+  els.gpsButton.classList.toggle("blocked", !hasGps && gpsStatus === "GPS blocked");
+  if (!els.gpsHint) return;
+  let hint = "";
+  if (!hasGps && gpsStatus === "GPS blocked") hint = "Allow location in Chrome";
+  if (!hasGps && gpsStatus === "GPS unavailable") hint = "Windows Location off";
+  if (!hasGps && gpsStatus === "GPS timeout") hint = "GPS timeout";
+  els.gpsHint.textContent = hint;
+  els.gpsHint.hidden = !hint;
 }
 
 function setUpdatedAt() {
@@ -519,12 +545,15 @@ function renderCurrentLocation() {
   const latLng = [currentLocation.lat, currentLocation.lng];
   if (currentMarker) {
     currentMarker.setLatLng(latLng);
+    currentMarker.setIcon(currentPhotoIcon());
+    currentMarker.setZIndexOffset(2000);
     currentMarker.setTooltipContent("Current location");
     renderGpsButton();
     return;
   }
   currentMarker = L.marker(latLng, {
-    icon: pinIcon("current", "me", "#375f8f"),
+    icon: currentPhotoIcon(),
+    zIndexOffset: 2000,
     title: "Current location"
   }).bindTooltip("Current location", {
     direction: "top",
@@ -556,6 +585,30 @@ function setCurrentLocationFromPosition(position) {
   renderCurrentLocation();
 }
 
+async function readGpsPermissionState() {
+  if (!navigator.permissions?.query) return "";
+  try {
+    gpsPermissionStatus = await navigator.permissions.query({ name: "geolocation" });
+    return gpsPermissionStatus.state;
+  } catch {
+    return "";
+  }
+}
+
+async function syncGpsPermissionState() {
+  const state = await readGpsPermissionState();
+  if (!gpsPermissionStatus) return;
+  gpsPermissionStatus.onchange = () => {
+    if (gpsPermissionStatus.state === "denied" && !hasGpsLocation()) setGpsStatus("GPS blocked");
+    if (gpsPermissionStatus.state === "prompt" && !hasGpsLocation()) setGpsStatus("GPS needed");
+  };
+  if (state === "denied" && !hasGpsLocation()) setGpsStatus("GPS blocked");
+  if (state === "prompt" && !hasGpsLocation()) setGpsStatus("GPS needed");
+  if (state === "granted" && !hasGpsLocation()) {
+    ensureCurrentLocation().then(refreshSelectedLocationView);
+  }
+}
+
 function refreshSelectedLocationView() {
   if (!selectedArrivalData?.location || !selectedArrivalData?.stop) return;
   const context = {
@@ -571,7 +624,8 @@ function startLocationWatch() {
     setGpsStatus("GPS unavailable");
     return;
   }
-  navigator.geolocation.watchPosition((position) => {
+  if (locationWatchId !== null) return;
+  locationWatchId = navigator.geolocation.watchPosition((position) => {
     setCurrentLocationFromPosition(position);
     refreshSelectedLocationView();
   }, (error) => {
@@ -583,17 +637,24 @@ function startLocationWatch() {
   });
 }
 
-function ensureCurrentLocation() {
+async function ensureCurrentLocation() {
   if (currentLocation?.source === "GPS") return Promise.resolve(currentLocation);
   if (!navigator.geolocation) {
     setGpsStatus("GPS unavailable");
     return Promise.resolve(null);
   }
+  const permissionState = await readGpsPermissionState();
+  if (permissionState === "denied") {
+    setGpsStatus("GPS blocked");
+    return Promise.resolve(null);
+  }
   if (gpsRequestPromise) return gpsRequestPromise;
   setStatus("Requesting GPS");
+  setGpsStatus("Requesting GPS");
   gpsRequestPromise = new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition((position) => {
       setCurrentLocationFromPosition(position);
+      startLocationWatch();
       gpsRequestPromise = null;
       resolve(currentLocation);
     }, (error) => {
@@ -934,7 +995,7 @@ async function boot() {
   renderGpsButton();
   renderBusList();
   renderSelectedStop();
-  startLocationWatch();
+  syncGpsPermissionState();
   await loadAllRoutes();
   await refreshLive();
   refreshTimer = setInterval(refreshLive, BUS_POLL_MS);
@@ -944,6 +1005,9 @@ async function boot() {
 window.addEventListener("beforeunload", () => {
   clearInterval(refreshTimer);
   clearInterval(renderTimer);
+  if (locationWatchId !== null && navigator.geolocation?.clearWatch) {
+    navigator.geolocation.clearWatch(locationWatchId);
+  }
 });
 
 boot();
