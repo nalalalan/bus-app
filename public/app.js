@@ -333,6 +333,9 @@ function busTitle(vehicle) {
 function focusVehicle(key) {
   const vehicle = estimatedVehicle(vehicleSamples.get(key));
   if (!vehicle || !Number.isFinite(vehicle.lat) || !Number.isFinite(vehicle.lng)) return;
+  selectedRouteId = vehicle.routeId || selectedRouteId;
+  updateRouteStyles();
+  setStatus(`Route ${vehicle.routeId} bus ${vehicle.equipment || vehicle.id}`);
   map.setView([vehicle.lat, vehicle.lng], 17, { animate: true });
   const marker = busMarkers.get(key);
   if (marker) marker.openTooltip();
