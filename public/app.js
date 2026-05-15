@@ -50,9 +50,10 @@ const LOCATIONS = [
   }
 ];
 
+const HOME_LOCATION = LOCATIONS.find((location) => location.id === "william");
+
 const els = {
   statusText: document.getElementById("statusText"),
-  routeList: document.getElementById("routeList"),
   locationList: document.getElementById("locationList"),
   busList: document.getElementById("busList"),
   selectedStopName: document.getElementById("selectedStopName"),
@@ -63,6 +64,7 @@ const els = {
 
 const routeColors = new Map();
 const routeLayers = new Map();
+const routeDataById = new Map();
 const routeState = new Map(ROUTES.map((routeId) => [routeId, {
   routeId,
   name: `Route ${routeId}`,
@@ -88,11 +90,15 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", {
 let map;
 let refreshTimer;
 let renderTimer;
-let currentLocation = null;
+let currentLocation = HOME_LOCATION ? { ...HOME_LOCATION, source: "Home" } : null;
 let currentMarker = null;
 let selectedLocationId = null;
 let selectedRouteId = "";
 let selectedStopMarker = null;
+let selectedTripLayer = null;
+let selectedConnectorLayer = null;
+let selectedArrivalData = null;
+let followVehicleKey = "";
 
 function api(path) {
   return fetch(path, { cache: "no-store" }).then(async (response) => {
@@ -148,13 +154,44 @@ function pinIcon(kind, label, color = "#555555") {
   });
 }
 
+function locationGlyph(location) {
+  if (location.id === "william") {
+    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 15 16 6l11 9v11h-7v-7h-8v7H5z" fill="currentColor"/></svg>`;
+  }
+  if (location.id === "alden") {
+    return `<span class="wpi-mark">WPI</span>`;
+  }
+  if (location.id === "union") {
+    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M9 5h14c3 0 5 2 5 5v9c0 3-2 5-5 5l3 4h-5l-2-4h-6l-2 4H6l3-4c-3 0-5-2-5-5v-9c0-3 2-5 5-5zm1 5v5h12v-5H10zm1 9a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor"/></svg>`;
+  }
+  if (location.id === "chipotle") {
+    return `<span class="brand-chipotle">C</span>`;
+  }
+  if (location.id === "coldstone") {
+    return `<span class="brand-coldstone">CS</span>`;
+  }
+  if (location.id === "blackstone") {
+    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M8 13h16l-2 15H10z" fill="currentColor"/><path d="M8 13 6 7l4-1 2 6 3-7 4 1-2 7 5-5 4 3-5 4z" fill="currentColor"/></svg>`;
+  }
+  return `<span>${escapeHtml(location.label)}</span>`;
+}
+
+function locationIcon(location, selected = false) {
+  return L.divIcon({
+    className: "location-marker",
+    html: `<span class="place-pin place-${escapeHtml(location.id)}${selected ? " selected" : ""}">${locationGlyph(location)}</span>`,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18]
+  });
+}
+
 function renderLocations() {
   for (const marker of locationMarkers.values()) marker.remove();
   locationMarkers.clear();
 
   for (const location of LOCATIONS) {
     const marker = L.marker([location.lat, location.lng], {
-      icon: pinIcon(location.id === selectedLocationId ? "location selected" : "location", location.label, "#222222"),
+      icon: locationIcon(location, location.id === selectedLocationId),
       title: location.name
     }).bindTooltip(`${escapeHtml(location.name)}<br>${escapeHtml(location.address)}`, {
       direction: "top",
@@ -170,19 +207,6 @@ function renderLocations() {
       <span>${escapeHtml(location.address)}</span>
     </button>`
   )).join("");
-}
-
-function renderRoutes() {
-  els.routeList.innerHTML = ROUTES.map((routeId) => {
-    const state = routeState.get(routeId);
-    const count = state?.vehicles?.length || 0;
-    const status = state?.ok ? `${count} live` : "blocked";
-    return `<button class="route-row${routeId === selectedRouteId ? " selected" : ""}" type="button" data-route="${escapeHtml(routeId)}">
-      <span class="route-swatch" style="--route-color:${routeColor(routeId)}"></span>
-      <strong>Route ${escapeHtml(routeId)}</strong>
-      <span>${escapeHtml(status)}</span>
-    </button>`;
-  }).join("");
 }
 
 function renderBusList() {
@@ -201,7 +225,7 @@ function renderBusList() {
       const speed = Number(vehicle.speedMph || 0);
       const delay = vehicle.delay ? ` - ${vehicle.delay}` : "";
       const nextStop = vehicle.nextStop ? ` - ${vehicle.nextStop}` : "";
-      rows.push(`<button class="bus-row" type="button" data-vehicle="${escapeHtml(vehicle.key)}">
+      rows.push(`<button class="bus-row${vehicle.key === followVehicleKey ? " selected" : ""}" type="button" data-vehicle="${escapeHtml(vehicle.key)}">
         <strong>Route ${escapeHtml(routeId)} bus ${escapeHtml(vehicle.equipment || vehicle.id)}</strong>
         <span>${escapeHtml(`${speed.toFixed(0)} mph${delay}${nextStop}`)}</span>
       </button>`);
@@ -248,6 +272,16 @@ function toRadians(degrees) {
 
 function toDegrees(radians) {
   return Number(radians) * 180 / Math.PI;
+}
+
+function haversineMeters(a, b) {
+  if (!a || !b) return Infinity;
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
+  const dLat = toRadians(b.lat - a.lat);
+  const dLng = toRadians(b.lng - a.lng);
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
 function destinationPoint(start, meters, bearingDegrees) {
@@ -333,10 +367,12 @@ function busTitle(vehicle) {
 function focusVehicle(key) {
   const vehicle = estimatedVehicle(vehicleSamples.get(key));
   if (!vehicle || !Number.isFinite(vehicle.lat) || !Number.isFinite(vehicle.lng)) return;
+  followVehicleKey = key;
   selectedRouteId = vehicle.routeId || selectedRouteId;
   updateRouteStyles();
+  renderBusList();
   setStatus(`Route ${vehicle.routeId} bus ${vehicle.equipment || vehicle.id}`);
-  map.setView([vehicle.lat, vehicle.lng], 17, { animate: true });
+  map.setView([vehicle.lat, vehicle.lng], 17, { animate: false });
   const marker = busMarkers.get(key);
   if (marker) marker.openTooltip();
 }
@@ -374,7 +410,12 @@ function renderBuses() {
     if (!active.has(key)) {
       marker.remove();
       busMarkers.delete(key);
+      if (followVehicleKey === key) followVehicleKey = "";
     }
+  }
+  if (followVehicleKey && busMarkers.has(followVehicleKey)) {
+    const followed = estimatedVehicle(vehicleSamples.get(followVehicleKey));
+    if (followed) map.setView([followed.lat, followed.lng], Math.max(map.getZoom(), 17), { animate: true });
   }
 }
 
@@ -398,7 +439,6 @@ function updateRouteStyles() {
     });
     if (selected) layer.bringToFront();
   }
-  renderRoutes();
 }
 
 function fitAll() {
@@ -428,25 +468,6 @@ function fitLocations() {
   fitBounds(LOCATIONS, 12);
 }
 
-function fitRouteOrBuses(routeId) {
-  const busPoints = [...vehicleSamples.values()]
-    .filter((sample) => sample.current?.routeId === routeId)
-    .map(estimatedVehicle)
-    .filter(Boolean);
-  selectedRouteId = routeId;
-  updateRouteStyles();
-  if (busPoints.length === 1) {
-    map.setView([busPoints[0].lat, busPoints[0].lng], 17, { animate: true });
-    return;
-  }
-  if (busPoints.length > 1) {
-    fitBounds(busPoints, 13);
-    return;
-  }
-  const routeBounds = routeLayers.get(routeId)?.getBounds?.();
-  if (routeBounds?.isValid?.()) map.fitBounds(routeBounds, { padding: [32, 32], maxZoom: 14 });
-}
-
 function renderCurrentLocation() {
   if (!currentLocation) return;
   const latLng = [currentLocation.lat, currentLocation.lng];
@@ -456,8 +477,8 @@ function renderCurrentLocation() {
   }
   currentMarker = L.marker(latLng, {
     icon: pinIcon("current", "me", "#375f8f"),
-    title: "Current location"
-  }).bindTooltip("Current location", {
+    title: currentLocation.source === "Home" ? "Home fallback" : "Current location"
+  }).bindTooltip(currentLocation.source === "Home" ? "Home fallback" : "Current location", {
     direction: "top",
     offset: [0, -12]
   }).addTo(map);
@@ -468,9 +489,13 @@ function startLocationWatch() {
   navigator.geolocation.watchPosition((position) => {
     currentLocation = {
       lat: position.coords.latitude,
-      lng: position.coords.longitude
+      lng: position.coords.longitude,
+      source: "GPS"
     };
     renderCurrentLocation();
+    if (selectedArrivalData?.location && selectedArrivalData?.stop) {
+      drawSelectedTrip(selectedArrivalData.location, selectedArrivalData.stop, selectedArrivalData.route?.id);
+    }
   }, () => {}, {
     enableHighAccuracy: true,
     maximumAge: 6000,
@@ -484,17 +509,104 @@ function focusSelectedLocation(location, stop = null) {
   fitBounds(points, 15);
 }
 
+function flattenRouteCoordinates(routeId) {
+  const shapes = routeDataById.get(routeId)?.shapes?.features || [];
+  const lines = [];
+  for (const feature of shapes) {
+    const geometry = feature.geometry || {};
+    if (geometry.type === "LineString") lines.push(geometry.coordinates.map(([lng, lat]) => ({ lat, lng })));
+    if (geometry.type === "MultiLineString") {
+      for (const line of geometry.coordinates) lines.push(line.map(([lng, lat]) => ({ lat, lng })));
+    }
+  }
+  return lines;
+}
+
+function nearestRoutePointIndex(line, point) {
+  let best = { index: -1, distance: Infinity };
+  line.forEach((candidate, index) => {
+    const distance = haversineMeters(candidate, point);
+    if (distance < best.distance) best = { index, distance };
+  });
+  return best;
+}
+
+function routeSegment(routeId, fromStop, toStop) {
+  const lines = flattenRouteCoordinates(routeId);
+  let best = null;
+  for (const line of lines) {
+    const from = nearestRoutePointIndex(line, fromStop);
+    const to = nearestRoutePointIndex(line, toStop);
+    if (from.index < 0 || to.index < 0) continue;
+    const score = from.distance + to.distance;
+    if (!best || score < best.score) best = { line, from, to, score };
+  }
+  if (!best) return [];
+  const start = Math.min(best.from.index, best.to.index);
+  const end = Math.max(best.from.index, best.to.index);
+  return best.line.slice(start, end + 1);
+}
+
+function nearestStopOnRoute(routeId, point) {
+  const stops = routeDataById.get(routeId)?.stops || [];
+  let best = null;
+  for (const stop of stops) {
+    if (!Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) continue;
+    const distance = haversineMeters(point, stop);
+    if (!best || distance < best.distanceMeters) best = { ...stop, distanceMeters: distance };
+  }
+  return best;
+}
+
+function drawSelectedTrip(location, stop, routeId = selectedRouteId) {
+  if (selectedTripLayer) selectedTripLayer.remove();
+  if (selectedConnectorLayer) selectedConnectorLayer.remove();
+  selectedTripLayer = null;
+  selectedConnectorLayer = null;
+  if (!routeId || !location || !stop) return;
+
+  const originStop = currentLocation ? nearestStopOnRoute(routeId, currentLocation) : null;
+  const segment = originStop ? routeSegment(routeId, originStop, stop) : [];
+  const color = routeColor(routeId);
+  const tripLayers = [];
+  if (segment.length > 1) {
+    tripLayers.push(L.polyline(segment.map((point) => [point.lat, point.lng]), {
+      color,
+      weight: 8,
+      opacity: 0.98,
+      lineCap: "round",
+      lineJoin: "round"
+    }));
+  }
+
+  const connectors = [];
+  if (currentLocation && originStop) connectors.push([[currentLocation.lat, currentLocation.lng], [originStop.lat, originStop.lng]]);
+  connectors.push([[stop.lat, stop.lng], [location.lat, location.lng]]);
+  selectedConnectorLayer = L.layerGroup(connectors.map((line) => L.polyline(line, {
+    color: "#171717",
+    weight: 3,
+    opacity: 0.72,
+    dashArray: "5 6"
+  }))).addTo(map);
+  selectedTripLayer = L.layerGroup(tripLayers).addTo(map);
+
+  const points = [location, stop, currentLocation, originStop, ...segment].filter(Boolean);
+  fitBounds(points, 15);
+}
+
 async function selectLocation(locationId) {
   const location = LOCATIONS.find((item) => item.id === locationId);
   if (!location) return;
+  followVehicleKey = "";
+  selectedArrivalData = null;
   selectedLocationId = location.id;
   renderLocations();
   renderSelectedStop();
-  focusSelectedLocation(location);
   setStatus(`Loading ${location.name}`);
 
   try {
     const data = await api(`/api/location-arrivals?locationId=${encodeURIComponent(location.id)}&now=${Date.now()}`);
+    selectedArrivalData = data;
     selectedRouteId = data.route?.id || "";
     updateRouteStyles();
     renderSelectedStop(data);
@@ -509,7 +621,7 @@ async function selectLocation(locationId) {
       }).addTo(map);
       selectedStopMarker.on("click", () => selectedStopMarker.openTooltip());
     }
-    focusSelectedLocation(location, data.stop);
+    drawSelectedTrip(location, data.stop, data.route?.id);
     setStatus(`${location.name} - Route ${selectedRouteId || "--"}`);
   } catch (error) {
     els.selectedStopName.textContent = "Stop unavailable";
@@ -521,6 +633,7 @@ async function selectLocation(locationId) {
 
 async function loadRoute(routeId) {
   const data = await api(`/api/route?routeId=${encodeURIComponent(routeId)}`);
+  routeDataById.set(routeId, data);
   const color = data.line?.color || data.shapes?.features?.[0]?.properties?.routeColor || routeColor(routeId);
   routeColors.set(routeId, normalizeColor(color, routeColor(routeId)));
   if (routeLayers.has(routeId)) routeLayers.get(routeId).remove();
@@ -573,7 +686,6 @@ async function loadAllRoutes() {
       });
     }
   }));
-  renderRoutes();
   fitAll();
 }
 
@@ -593,7 +705,6 @@ async function refreshLive() {
     }
   }));
   renderBuses();
-  renderRoutes();
   renderBusList();
   setUpdatedAt();
   const total = [...routeState.values()].reduce((sum, state) => sum + (state.vehicles?.length || 0), 0);
@@ -606,11 +717,6 @@ function bindEvents() {
     if (!row) return;
     selectLocation(row.dataset.location);
   });
-  els.routeList.addEventListener("click", (event) => {
-    const row = event.target.closest("[data-route]");
-    if (!row) return;
-    fitRouteOrBuses(row.dataset.route);
-  });
   els.busList.addEventListener("click", (event) => {
     const row = event.target.closest("[data-vehicle]");
     if (!row) return;
@@ -622,7 +728,7 @@ async function boot() {
   initMap();
   bindEvents();
   renderLocations();
-  renderRoutes();
+  renderCurrentLocation();
   renderBusList();
   renderSelectedStop();
   startLocationWatch();

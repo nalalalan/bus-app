@@ -152,7 +152,6 @@ h1 {
   border-bottom: 0;
 }
 
-.route-list,
 .location-list,
 .bus-list,
 .arrival-list {
@@ -160,7 +159,6 @@ h1 {
   gap: 6px;
 }
 
-.route-row,
 .location-row,
 .bus-row,
 .arrival-row {
@@ -183,7 +181,6 @@ h1 {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.route-row strong,
 .location-row strong,
 .bus-row strong,
 .arrival-row strong {
@@ -193,7 +190,6 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.route-row span:last-child,
 .location-row span,
 .bus-row span,
 .arrival-row span,
@@ -216,14 +212,6 @@ h1 {
   gap: 7px;
 }
 
-.route-swatch {
-  width: 16px;
-  height: 16px;
-  border: 1px solid rgba(0, 0, 0, .16);
-  border-radius: 999px;
-  background: var(--route-color);
-}
-
 .muted {
   color: var(--muted);
   background: #f8f8f5;
@@ -235,6 +223,80 @@ h1 {
 .leaflet-marker-icon.stop-marker {
   background: transparent;
   border: 0;
+}
+
+.place-pin {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 2px solid #ffffff;
+  border-radius: 999px;
+  background: #171717;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .24);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.place-pin svg {
+  width: 22px;
+  height: 22px;
+}
+
+.place-pin.selected {
+  box-shadow: 0 0 0 5px rgba(0, 0, 0, .18), 0 2px 8px rgba(0, 0, 0, .24);
+}
+
+.place-william {
+  background: #2d5c7f;
+}
+
+.place-alden {
+  background: #b31b2c;
+}
+
+.place-union {
+  background: #414141;
+}
+
+.place-chipotle {
+  background: #ad2119;
+  border-color: #d5aa42;
+}
+
+.place-coldstone {
+  background: #b82025;
+  border-color: #c8a53f;
+}
+
+.place-blackstone {
+  background: #6f4b20;
+}
+
+.wpi-mark,
+.brand-chipotle,
+.brand-coldstone {
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+
+.wpi-mark {
+  font-size: 9px;
+}
+
+.brand-chipotle {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #4b190a;
+  font-size: 16px;
+}
+
+.brand-coldstone {
+  font-size: 10px;
+  color: #fff3d0;
 }
 
 .pin {
