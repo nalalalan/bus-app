@@ -50,10 +50,9 @@ const LOCATIONS = [
   }
 ];
 
-const HOME_LOCATION = LOCATIONS.find((location) => location.id === "william");
-
 const els = {
   statusText: document.getElementById("statusText"),
+  gpsButton: document.getElementById("gpsButton"),
   locationList: document.getElementById("locationList"),
   busList: document.getElementById("busList"),
   selectedStopName: document.getElementById("selectedStopName"),
@@ -90,15 +89,17 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", {
 let map;
 let refreshTimer;
 let renderTimer;
-let currentLocation = HOME_LOCATION ? { ...HOME_LOCATION, source: "Home" } : null;
+let currentLocation = null;
 let currentMarker = null;
 let selectedLocationId = null;
 let selectedRouteId = "";
-let selectedStopMarker = null;
+let selectedStopLayer = null;
 let selectedTripLayer = null;
 let selectedConnectorLayer = null;
 let selectedArrivalData = null;
 let followVehicleKey = "";
+let gpsStatus = "GPS needed";
+let gpsRequestPromise = null;
 
 function api(path) {
   return fetch(path, { cache: "no-store" }).then(async (response) => {
@@ -154,24 +155,28 @@ function pinIcon(kind, label, color = "#555555") {
   });
 }
 
+function logoImg(src, alt) {
+  return `<img class="place-logo" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">`;
+}
+
 function locationGlyph(location) {
   if (location.id === "william") {
     return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M5 15 16 6l11 9v11h-7v-7h-8v7H5z" fill="currentColor"/></svg>`;
   }
   if (location.id === "alden") {
-    return `<span class="wpi-mark">WPI</span>`;
+    return logoImg("/assets/wpi-favicon.ico", "WPI");
   }
   if (location.id === "union") {
-    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M9 5h14c3 0 5 2 5 5v9c0 3-2 5-5 5l3 4h-5l-2-4h-6l-2 4H6l3-4c-3 0-5-2-5-5v-9c0-3 2-5 5-5zm1 5v5h12v-5H10zm1 9a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor"/></svg>`;
+    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M9 4h14c3 0 5 2 5 5v10c0 3-2 5-5 5l3 4h-5l-2-4h-6l-2 4H6l3-4c-3 0-5-2-5-5V9c0-3 2-5 5-5zm0 5v5h14V9H9zm2 9a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm10 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor"/></svg>`;
   }
   if (location.id === "chipotle") {
-    return `<span class="brand-chipotle">C</span>`;
+    return logoImg("/assets/chipotle-logo.svg", "Chipotle");
   }
   if (location.id === "coldstone") {
-    return `<span class="brand-coldstone">CS</span>`;
+    return logoImg("/assets/coldstone-favicon.ico", "Cold Stone");
   }
   if (location.id === "blackstone") {
-    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M8 13h16l-2 15H10z" fill="currentColor"/><path d="M8 13 6 7l4-1 2 6 3-7 4 1-2 7 5-5 4 3-5 4z" fill="currentColor"/></svg>`;
+    return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M8 13h16l-2 15H10L8 13z" fill="currentColor"/><path d="M8 13 6 7l4-1 2 6 3-7 4 1-2 7 5-5 4 3-5 4H8z" fill="currentColor"/><path d="M12 16h2l1 9h-2l-1-9zm5 0h2l-1 9h-2l1-9z" fill="#fff"/></svg>`;
   }
   return `<span>${escapeHtml(location.label)}</span>`;
 }
@@ -182,6 +187,29 @@ function locationIcon(location, selected = false) {
     html: `<span class="place-pin place-${escapeHtml(location.id)}${selected ? " selected" : ""}">${locationGlyph(location)}</span>`,
     iconSize: [36, 36],
     iconAnchor: [18, 18]
+  });
+}
+
+function busStopSvg() {
+  return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M9 4h14c2 0 4 2 4 4v11c0 2-1 4-3 4l2 5h-4l-2-4h-8l-2 4H6l2-5c-2 0-3-2-3-4V8c0-2 2-4 4-4zm1 5v7h12V9H10zm2 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm8 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor"/></svg>`;
+}
+
+function busStopIcon(kind, label, color = "#555555") {
+  const size = kind === "route" ? 18 : 42;
+  return L.divIcon({
+    className: "stop-marker",
+    html: `<span class="bus-stop-pin ${escapeHtml(kind)}" style="--stop-color:${normalizeColor(color)}">${busStopSvg()}${label ? `<span>${escapeHtml(label)}</span>` : ""}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2]
+  });
+}
+
+function walkLabelIcon(label) {
+  return L.divIcon({
+    className: "walk-label-marker",
+    html: `<span class="walk-label">${escapeHtml(label)}</span>`,
+    iconSize: [98, 22],
+    iconAnchor: [49, 11]
   });
 }
 
@@ -234,7 +262,7 @@ function renderBusList() {
   els.busList.innerHTML = rows.join("");
 }
 
-function renderSelectedStop(data = null) {
+function renderSelectedStop(data = null, context = {}) {
   if (!data?.stop) {
     els.selectedStopName.textContent = selectedLocationId ? "Loading stop" : "Select a location";
     els.selectedStopDetail.textContent = "--";
@@ -247,12 +275,18 @@ function renderSelectedStop(data = null) {
   const location = data.location;
   const distanceFeet = Math.round(Number(stop.distanceMeters || 0) * 3.28084);
   els.selectedStopName.textContent = stop.name || "Closest stop";
-  els.selectedStopDetail.textContent = `Route ${route?.id || "--"} - ${distanceFeet} ft from ${location?.name || "location"}`;
+  if (context.atSelectedPlace) {
+    els.selectedStopDetail.textContent = `At ${location?.name || "selected place"}; nearest stop is ${distanceFeet} ft away`;
+  } else if (!context.hasGps) {
+    els.selectedStopDetail.textContent = `GPS needed; nearest stop is ${distanceFeet} ft from ${location?.name || "location"}`;
+  } else {
+    els.selectedStopDetail.textContent = `Exit stop for ${location?.name || "location"}; ${distanceFeet} ft from place`;
+  }
   els.arrivalList.innerHTML = (data.arrivals || []).length
     ? data.arrivals.map((arrival) => (
       `<div class="arrival-row">
         <strong>${escapeHtml(timeFormatter.format(new Date(arrival.predictedMs)))}</strong>
-        <span>Route ${escapeHtml(arrival.routeId)} to ${escapeHtml(arrival.destination || "destination")} - ${escapeHtml(arrival.minutes || "")}</span>
+        <span>Route ${escapeHtml(arrival.routeId)} at this stop to ${escapeHtml(arrival.destination || "destination")} - ${escapeHtml(arrival.minutes || "")}</span>
       </div>`
     )).join("")
     : `<div class="arrival-row muted"><strong>No WRTA times</strong><span>${escapeHtml(stop.name || "")}</span></div>`;
@@ -260,6 +294,11 @@ function renderSelectedStop(data = null) {
 
 function setStatus(text) {
   els.statusText.textContent = text;
+}
+
+function renderGpsButton() {
+  els.gpsButton.textContent = currentLocation?.source === "GPS" ? "GPS on" : gpsStatus === "GPS needed" ? "Use GPS" : gpsStatus;
+  els.gpsButton.classList.toggle("active", currentLocation?.source === "GPS");
 }
 
 function setUpdatedAt() {
@@ -469,44 +508,194 @@ function fitLocations() {
 }
 
 function renderCurrentLocation() {
-  if (!currentLocation) return;
+  if (!currentLocation) {
+    if (currentMarker) {
+      currentMarker.remove();
+      currentMarker = null;
+    }
+    renderGpsButton();
+    return;
+  }
   const latLng = [currentLocation.lat, currentLocation.lng];
   if (currentMarker) {
     currentMarker.setLatLng(latLng);
+    currentMarker.setTooltipContent("Current location");
+    renderGpsButton();
     return;
   }
   currentMarker = L.marker(latLng, {
     icon: pinIcon("current", "me", "#375f8f"),
-    title: currentLocation.source === "Home" ? "Home fallback" : "Current location"
-  }).bindTooltip(currentLocation.source === "Home" ? "Home fallback" : "Current location", {
+    title: "Current location"
+  }).bindTooltip("Current location", {
     direction: "top",
     offset: [0, -12]
   }).addTo(map);
+  renderGpsButton();
+}
+
+function gpsErrorText(error) {
+  if (error?.code === 1) return "GPS blocked";
+  if (error?.code === 2) return "GPS unavailable";
+  if (error?.code === 3) return "GPS timeout";
+  return "GPS needed";
+}
+
+function setGpsStatus(text) {
+  gpsStatus = text;
+  renderGpsButton();
+}
+
+function setCurrentLocationFromPosition(position) {
+  if (!position?.coords) return;
+  currentLocation = {
+    lat: position.coords.latitude,
+    lng: position.coords.longitude,
+    source: "GPS"
+  };
+  setGpsStatus("GPS on");
+  renderCurrentLocation();
+}
+
+function refreshSelectedLocationView() {
+  if (!selectedArrivalData?.location || !selectedArrivalData?.stop) return;
+  const context = {
+    hasGps: hasGpsLocation(),
+    atSelectedPlace: isAtSelectedPlace(selectedArrivalData.location)
+  };
+  renderSelectedStop(selectedArrivalData, context);
+  drawSelectedTrip(selectedArrivalData.location, selectedArrivalData.stop, selectedArrivalData.route?.id);
 }
 
 function startLocationWatch() {
-  if (!navigator.geolocation) return;
+  if (!navigator.geolocation) {
+    setGpsStatus("GPS unavailable");
+    return;
+  }
   navigator.geolocation.watchPosition((position) => {
-    currentLocation = {
-      lat: position.coords.latitude,
-      lng: position.coords.longitude,
-      source: "GPS"
-    };
-    renderCurrentLocation();
-    if (selectedArrivalData?.location && selectedArrivalData?.stop) {
-      drawSelectedTrip(selectedArrivalData.location, selectedArrivalData.stop, selectedArrivalData.route?.id);
-    }
-  }, () => {}, {
+    setCurrentLocationFromPosition(position);
+    refreshSelectedLocationView();
+  }, (error) => {
+    setGpsStatus(gpsErrorText(error));
+  }, {
     enableHighAccuracy: true,
     maximumAge: 6000,
     timeout: 16000
   });
 }
 
-function focusSelectedLocation(location, stop = null) {
-  const points = [location, currentLocation].filter(Boolean);
-  if (stop) points.push(stop);
-  fitBounds(points, 15);
+function ensureCurrentLocation() {
+  if (currentLocation?.source === "GPS") return Promise.resolve(currentLocation);
+  if (!navigator.geolocation) {
+    setGpsStatus("GPS unavailable");
+    return Promise.resolve(null);
+  }
+  if (gpsRequestPromise) return gpsRequestPromise;
+  setStatus("Requesting GPS");
+  gpsRequestPromise = new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition((position) => {
+      setCurrentLocationFromPosition(position);
+      gpsRequestPromise = null;
+      resolve(currentLocation);
+    }, (error) => {
+      setGpsStatus(gpsErrorText(error));
+      gpsRequestPromise = null;
+      resolve(null);
+    }, {
+      enableHighAccuracy: true,
+      maximumAge: 3000,
+      timeout: 7000
+    });
+  });
+  return gpsRequestPromise;
+}
+
+function hasGpsLocation() {
+  return currentLocation?.source === "GPS"
+    && Number.isFinite(currentLocation.lat)
+    && Number.isFinite(currentLocation.lng);
+}
+
+function isAtSelectedPlace(location) {
+  return hasGpsLocation() && haversineMeters(currentLocation, location) <= 90;
+}
+
+function midpoint(a, b) {
+  return {
+    lat: (Number(a.lat) + Number(b.lat)) / 2,
+    lng: (Number(a.lng) + Number(b.lng)) / 2
+  };
+}
+
+function addWalkingConnector(layers, from, to, label) {
+  if (!from || !to) return;
+  layers.push(L.polyline([[from.lat, from.lng], [to.lat, to.lng]], {
+    color: "#171717",
+    weight: 3,
+    opacity: 0.72,
+    dashArray: "5 6"
+  }));
+  layers.push(L.marker(midpoint(from, to), {
+    icon: walkLabelIcon(label),
+    interactive: false,
+    keyboard: false
+  }));
+}
+
+function routeStopsAlongSegment(routeId, segment, originStop, destinationStop) {
+  const stops = routeDataById.get(routeId)?.stops || [];
+  const byId = new Map();
+  for (const stop of [originStop, destinationStop]) {
+    if (stop?.id) byId.set(stop.id, stop);
+  }
+  if (segment.length > 1) {
+    for (const stop of stops) {
+      if (!Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) continue;
+      const nearest = nearestRoutePointIndex(segment, stop);
+      if (nearest.distance <= 85) byId.set(stop.id || `${stop.lat}:${stop.lng}`, stop);
+    }
+  }
+  return [...byId.values()].sort((a, b) => {
+    if (!segment.length) return 0;
+    return nearestRoutePointIndex(segment, a).index - nearestRoutePointIndex(segment, b).index;
+  });
+}
+
+function drawStopMarkers(routeId, stops, originStop, destinationStop) {
+  if (selectedStopLayer) selectedStopLayer.remove();
+  const color = routeColor(routeId);
+  const markers = [];
+  const originId = originStop?.id;
+  const destinationId = destinationStop?.id;
+  for (const stop of stops) {
+    if (!Number.isFinite(stop.lat) || !Number.isFinite(stop.lng)) continue;
+    if (stop.id === originId || stop.id === destinationId) continue;
+    markers.push(L.marker([stop.lat, stop.lng], {
+      icon: busStopIcon("route", "", color),
+      title: stop.name || "Bus stop"
+    }).bindTooltip(escapeHtml(stop.name || "Bus stop"), {
+      direction: "top",
+      offset: [0, -10]
+    }));
+  }
+  if (originStop && Number.isFinite(originStop.lat) && Number.isFinite(originStop.lng)) {
+    markers.push(L.marker([originStop.lat, originStop.lng], {
+      icon: busStopIcon("board", "Board", color),
+      title: originStop.name || "Board stop"
+    }).bindTooltip(`${escapeHtml(originStop.name || "Board stop")}<br>Board stop`, {
+      direction: "top",
+      offset: [0, -16]
+    }));
+  }
+  if (destinationStop && Number.isFinite(destinationStop.lat) && Number.isFinite(destinationStop.lng)) {
+    markers.push(L.marker([destinationStop.lat, destinationStop.lng], {
+      icon: busStopIcon("exit", "Exit", color),
+      title: destinationStop.name || "Exit stop"
+    }).bindTooltip(`${escapeHtml(destinationStop.name || "Exit stop")}<br>Exit stop`, {
+      direction: "top",
+      offset: [0, -16]
+    }));
+  }
+  selectedStopLayer = L.layerGroup(markers).addTo(map);
 }
 
 function flattenRouteCoordinates(routeId) {
@@ -561,11 +750,15 @@ function nearestStopOnRoute(routeId, point) {
 function drawSelectedTrip(location, stop, routeId = selectedRouteId) {
   if (selectedTripLayer) selectedTripLayer.remove();
   if (selectedConnectorLayer) selectedConnectorLayer.remove();
+  if (selectedStopLayer) selectedStopLayer.remove();
   selectedTripLayer = null;
   selectedConnectorLayer = null;
+  selectedStopLayer = null;
   if (!routeId || !location || !stop) return;
 
-  const originStop = currentLocation ? nearestStopOnRoute(routeId, currentLocation) : null;
+  const gpsLocation = hasGpsLocation() ? currentLocation : null;
+  const atSelectedPlace = isAtSelectedPlace(location);
+  const originStop = gpsLocation && !atSelectedPlace ? nearestStopOnRoute(routeId, gpsLocation) : null;
   const segment = originStop ? routeSegment(routeId, originStop, stop) : [];
   const color = routeColor(routeId);
   const tripLayers = [];
@@ -580,17 +773,18 @@ function drawSelectedTrip(location, stop, routeId = selectedRouteId) {
   }
 
   const connectors = [];
-  if (currentLocation && originStop) connectors.push([[currentLocation.lat, currentLocation.lng], [originStop.lat, originStop.lng]]);
-  connectors.push([[stop.lat, stop.lng], [location.lat, location.lng]]);
-  selectedConnectorLayer = L.layerGroup(connectors.map((line) => L.polyline(line, {
-    color: "#171717",
-    weight: 3,
-    opacity: 0.72,
-    dashArray: "5 6"
-  }))).addTo(map);
+  if (gpsLocation && originStop) addWalkingConnector(connectors, gpsLocation, originStop, "walk to stop");
+  if (atSelectedPlace) {
+    addWalkingConnector(connectors, location, stop, "walk to stop");
+  } else {
+    addWalkingConnector(connectors, stop, location, "walk from stop");
+  }
+  selectedConnectorLayer = L.layerGroup(connectors).addTo(map);
   selectedTripLayer = L.layerGroup(tripLayers).addTo(map);
+  const routeStops = routeStopsAlongSegment(routeId, segment, originStop, stop);
+  drawStopMarkers(routeId, routeStops, originStop, stop);
 
-  const points = [location, stop, currentLocation, originStop, ...segment].filter(Boolean);
+  const points = [location, stop, gpsLocation, originStop, ...segment].filter(Boolean);
   fitBounds(points, 15);
 }
 
@@ -605,25 +799,29 @@ async function selectLocation(locationId) {
   setStatus(`Loading ${location.name}`);
 
   try {
-    const data = await api(`/api/location-arrivals?locationId=${encodeURIComponent(location.id)}&now=${Date.now()}`);
+    const gpsPromise = ensureCurrentLocation();
+    const [data] = await Promise.all([
+      api(`/api/location-arrivals?locationId=${encodeURIComponent(location.id)}&now=${Date.now()}`),
+      gpsPromise
+    ]);
     selectedArrivalData = data;
     selectedRouteId = data.route?.id || "";
     updateRouteStyles();
-    renderSelectedStop(data);
-    if (selectedStopMarker) selectedStopMarker.remove();
-    if (data.stop && Number.isFinite(data.stop.lat) && Number.isFinite(data.stop.lng)) {
-      selectedStopMarker = L.marker([data.stop.lat, data.stop.lng], {
-        icon: pinIcon("stop", "S", routeColor(selectedRouteId)),
-        title: data.stop.name || "Closest stop"
-      }).bindTooltip(`${escapeHtml(data.stop.name || "Closest stop")}<br>Route ${escapeHtml(selectedRouteId || "--")}`, {
-        direction: "top",
-        offset: [0, -12]
-      }).addTo(map);
-      selectedStopMarker.on("click", () => selectedStopMarker.openTooltip());
-    }
+    const context = {
+      hasGps: hasGpsLocation(),
+      atSelectedPlace: isAtSelectedPlace(location)
+    };
+    renderSelectedStop(data, context);
     drawSelectedTrip(location, data.stop, data.route?.id);
-    setStatus(`${location.name} - Route ${selectedRouteId || "--"}`);
+    if (!context.hasGps) {
+      setStatus(`${gpsStatus}; ${location.name} stop shown`);
+    } else if (context.atSelectedPlace) {
+      setStatus(`At ${location.name}; nearby stop shown`);
+    } else {
+      setStatus(`${location.name} - Route ${selectedRouteId || "--"}`);
+    }
   } catch (error) {
+    if (selectedStopLayer) selectedStopLayer.remove();
     els.selectedStopName.textContent = "Stop unavailable";
     els.selectedStopDetail.textContent = error.message;
     els.arrivalList.innerHTML = "";
@@ -722,6 +920,10 @@ function bindEvents() {
     if (!row) return;
     focusVehicle(row.dataset.vehicle);
   });
+  els.gpsButton.addEventListener("click", async () => {
+    await ensureCurrentLocation();
+    refreshSelectedLocationView();
+  });
 }
 
 async function boot() {
@@ -729,6 +931,7 @@ async function boot() {
   bindEvents();
   renderLocations();
   renderCurrentLocation();
+  renderGpsButton();
   renderBusList();
   renderSelectedStop();
   startLocationWatch();

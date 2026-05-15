@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>WRTA Bus Tracker | bus.aolabs.io</title>
+    <title>bus</title>
     <meta name="description" content="Minimal WRTA live tracker for routes 2, 4, 3, and 31.">
     <link rel="canonical" href="https://bus.aolabs.io/">
     <meta property="og:title" content="WRTA bus tracker">
@@ -13,25 +13,31 @@
     <link rel="icon" href="/icon.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="/apple-touch-icon.svg">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <link rel="stylesheet" href="https://aolabs.io/suite-header.css?v=20260515-ao-disc-a">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <header class="topbar">
-      <a class="ao-link" href="https://aolabs.io/" aria-label="AO Labs">
-        <span class="ao-mark" aria-hidden="true">AO</span>
-      </a>
-      <div>
-        <p class="eyebrow">bus.aolabs.io</p>
-        <h1>WRTA bus tracker</h1>
-      </div>
-      <a class="source-link" href="https://swiv.wrta.cadavl.com/SWIV/WRTA" target="_blank" rel="noreferrer">WRTA source</a>
-    </header>
+    <header class="suite-topbar" aria-label="bus navigation">
+        <div class="suite-brand-cluster">
+          <a class="suite-ao-home" href="https://aolabs.io/" aria-label="aolabs.io">
+            <img src="https://aolabs.io/marks/ao-ink.svg?v=20260515-ao-disc-a" alt="">
+          </a>
+          <a class="suite-app-brand" href="/" aria-label="bus home">
+            <img class="suite-app-mark" src="https://aolabs.io/icons/bus.svg?v=20260515-bus" alt="">
+            <span class="suite-app-name">bus</span>
+          </a>
+        </div>
+          <div class="suite-topbar-actions" aria-label="bus actions">
+            <a href="https://swiv.wrta.cadavl.com/SWIV/WRTA" target="_blank" rel="noreferrer">wrta source</a>
+          </div>
+      </header>
 
     <main class="tracker">
       <section class="map-panel" aria-label="WRTA live map">
         <div class="map-toolbar">
           <span id="statusText">Loading</span>
+          <button id="gpsButton" type="button">Use GPS</button>
         </div>
         <div id="map" aria-label="Routes 2, 4, 3, and 31"></div>
       </section>
