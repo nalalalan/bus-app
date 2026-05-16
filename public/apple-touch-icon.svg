@@ -1,9 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="WRTA bus tracker icon">
-  <rect width="128" height="128" rx="18" fill="#f4f4f1"/>
-  <path d="M31 25h66c9 0 16 7 16 16v48c0 8-6 15-14 16l6 10H93l-6-10H41l-6 10H23l6-10c-8-1-14-8-14-16V41c0-9 7-16 16-16z" fill="#171717"/>
-  <path d="M29 43c0-4 3-7 7-7h56c4 0 7 3 7 7v21H29z" fill="#ffffff"/>
-  <path d="M35 74h58" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
-  <circle cx="42" cy="92" r="8" fill="#f4f4f1"/>
-  <circle cx="86" cy="92" r="8" fill="#f4f4f1"/>
-  <path d="M43 50h16M69 50h16" stroke="#171717" stroke-width="5" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="bus icon">
+  <defs>
+    <filter id="shadow" x="-35%" y="-35%" width="170%" height="170%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="8" flood-color="#3c2b22" flood-opacity=".16"/>
+      <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="#fffaf2" flood-opacity=".55"/>
+    </filter>
+    <linearGradient id="body" x1="24" y1="36" x2="104" y2="92">
+      <stop stop-color="#e7a57b"/>
+      <stop offset=".55" stop-color="#c77958"/>
+      <stop offset="1" stop-color="#9e5e4a"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="31" y1="35" x2="95" y2="72">
+      <stop stop-color="#fff9ef"/>
+      <stop offset="1" stop-color="#eadac5"/>
+    </linearGradient>
+    <linearGradient id="route" x1="24" y1="88" x2="105" y2="42">
+      <stop stop-color="#78a49d"/>
+      <stop offset=".55" stop-color="#d7b156"/>
+      <stop offset="1" stop-color="#6f849f"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="32" y1="42" x2="96" y2="104">
+      <stop stop-color="#5f5950"/>
+      <stop offset="1" stop-color="#383530"/>
+    </linearGradient>
+  </defs>
+  <g filter="url(#shadow)" transform="translate(64 64) scale(1.14) translate(-64 -64)">
+    <path d="M24 91c14-9 26-13 40-13 16 0 26 6 41-4" fill="none" stroke="url(#route)" stroke-width="7" stroke-linecap="round" opacity=".92"/>
+    <path d="M35 33h48c12 0 21 8 24 20l5 24c2 9-5 17-14 17H31c-9 0-16-7-16-16V53c0-11 9-20 20-20z" fill="url(#body)"/>
+    <path d="M30 49c0-5 4-9 9-9h41c7 0 13 5 15 12l3 12H30z" fill="url(#glass)"/>
+    <path d="M43 52h18M72 52h16" fill="none" stroke="#c77958" stroke-width="5" stroke-linecap="round" opacity=".84"/>
+    <path d="M32 75h20M72 75h19" fill="none" stroke="#fff7ea" stroke-width="5" stroke-linecap="round" opacity=".86"/>
+    <path d="M23 86h82" fill="none" stroke="#f3dfc6" stroke-width="5" stroke-linecap="round" opacity=".78"/>
+    <circle cx="40" cy="93" r="10" fill="url(#ink)"/>
+    <circle cx="90" cy="93" r="10" fill="url(#ink)"/>
+    <circle cx="40" cy="93" r="3.8" fill="#fff8ed"/>
+    <circle cx="90" cy="93" r="3.8" fill="#fff8ed"/>
+    <circle cx="105" cy="73" r="8" fill="#e8c461"/>
+    <path d="M101.5 73h7M105 69.5v7" fill="none" stroke="#fffaf2" stroke-width="3" stroke-linecap="round"/>
+  </g>
 </svg>

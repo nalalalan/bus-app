@@ -169,6 +169,80 @@ h1 {
   white-space: nowrap;
 }
 
+.paper-strip {
+  position: relative;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 22px;
+  width: 100%;
+  max-width: 100vw;
+  padding: 12px clamp(16px, 3vw, 34px);
+  border-bottom: 1px solid rgba(92, 78, 62, .16);
+  background: rgba(255, 252, 246, .98);
+}
+
+.paper-copy {
+  min-width: 0;
+}
+
+.paper-copy span {
+  display: block;
+  margin-bottom: 4px;
+  color: rgba(95, 78, 59, .62);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.paper-copy strong {
+  display: block;
+  color: #25150d;
+  font-size: 28px;
+  line-height: 1.02;
+  overflow-wrap: break-word;
+}
+
+.paper-copy p {
+  max-width: 860px;
+  margin: 6px 0 0;
+  color: rgba(63, 48, 35, .72);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+.paper-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.paper-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  border: 1px solid rgba(92, 78, 62, .20);
+  border-radius: 6px;
+  padding: 0 14px;
+  background: rgba(92, 78, 62, .05);
+  color: #25150d;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.paper-button.primary {
+  border-color: rgba(183, 112, 78, .40);
+  background: #e4aa78;
+  color: #21140d;
+}
+
 .tracker {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 330px;
@@ -505,6 +579,18 @@ h1 {
 }
 
 @media (max-width: 900px) {
+  .paper-strip {
+    display: block;
+    grid-template-columns: 1fr;
+    align-items: start;
+    overflow: hidden;
+  }
+
+  .paper-actions {
+    margin-top: 14px;
+    justify-content: flex-start;
+  }
+
   .tracker {
     grid-template-columns: 1fr;
   }
@@ -538,6 +624,23 @@ h1 {
   .source-link {
     grid-column: 1 / -1;
     justify-self: stretch;
+  }
+
+  .paper-copy strong {
+    max-width: calc(100vw - 32px);
+    font-size: 20px;
+    line-height: 1.06;
+    word-break: break-word;
+  }
+
+  .paper-copy p {
+    display: none;
+    max-width: calc(100vw - 32px);
+    word-break: break-word;
+  }
+
+  .paper-button {
+    width: 100%;
   }
 
   .tracker {
