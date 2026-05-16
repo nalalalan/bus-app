@@ -25,6 +25,12 @@ const MAX_AUTO_ROUTE_CANDIDATES = 4;
 const MAX_AUTO_BOARD_CANDIDATES = 4;
 const MAX_AUTO_EXIT_CANDIDATES = 4;
 const MAX_AUTO_DEPARTURES_PER_STOP = 5;
+const MAX_TRANSFER_FIRST_ROUTES = 4;
+const MAX_TRANSFER_SECOND_ROUTES = 3;
+const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 1;
+const MAX_TRANSFER_PLANS = 7;
+const MAX_TRANSFER_WALK_METERS = 550;
+const MIN_TRANSFER_MS = 3 * 60 * 1000;
 
 const destinations = {
   william: {
@@ -538,9 +544,12 @@ async function resolveWrtaLine(routeId) {
   };
 }
 
-async function autoRoutePreviews(origin, destination) {
+async function routePreviews(origin, destination, routeIds = null) {
   const [topo, lines] = await Promise.all([getSwivTopo(), getWrtaRouteLines()]);
   const lineById = new Map(lines.map((line) => [Number(line.lineId), line]));
+  const routeSet = Array.isArray(routeIds) && routeIds.length
+    ? new Set(routeIds.map((routeId) => String(routeId)))
+    : null;
   const previews = new Map();
   const stops = topo?.topo?.[0]?.pointArret || [];
 
@@ -555,6 +564,7 @@ async function autoRoutePreviews(origin, destination) {
     for (const info of stop.infoLigneSwiv || []) {
       const line = lineById.get(Number(info.idLigne));
       if (!line) continue;
+      if (routeSet && !routeSet.has(String(line.routeId))) continue;
       const existing = previews.get(line.routeId) || {
         routeId: line.routeId,
         lineId: line.lineId,
@@ -569,13 +579,16 @@ async function autoRoutePreviews(origin, destination) {
   }
 
   return [...previews.values()]
-    .filter((preview) => TRACKED_ROUTE_IDS.includes(String(preview.routeId)))
     .filter((preview) => Number.isFinite(preview.nearestBoardMeters) && Number.isFinite(preview.nearestExitMeters))
     .map((preview) => ({
       ...preview,
       directWalkMeters: preview.nearestBoardMeters + preview.nearestExitMeters
     }))
     .sort((a, b) => a.directWalkMeters - b.directWalkMeters);
+}
+
+async function autoRoutePreviews(origin, destination) {
+  return routePreviews(origin, destination, TRACKED_ROUTE_IDS);
 }
 
 async function getSwivRouteStopMap(routeId, lineId) {
@@ -884,11 +897,16 @@ function compactStop(stop) {
 }
 
 function choiceSummary(plan, index) {
+  const destinationArrivalMs = plan.timings.destinationArrivalMs
+    || plan.timings.exitArrivalMs + Math.round(Number(plan.walking.fromExit?.durationSeconds || 0) * 1000);
   return {
     index,
+    kind: plan.kind || "direct",
     route: plan.route,
     boardingStop: plan.boardingStop,
     exitStop: plan.exitStop,
+    legs: plan.legs || null,
+    transfers: plan.transfers || [],
     timings: plan.timings,
     walking: {
       toBoard: {
@@ -900,7 +918,21 @@ function choiceSummary(plan, index) {
         distanceMeters: plan.walking.fromExit.distanceMeters,
         durationSeconds: plan.walking.fromExit.durationSeconds,
         source: plan.walking.fromExit.source
-      }
+      },
+      transfer: plan.walking.transfer ? {
+        distanceMeters: plan.walking.transfer.distanceMeters,
+        durationSeconds: plan.walking.transfer.durationSeconds,
+        source: plan.walking.transfer.source
+      } : null,
+      totalMeters: totalWalkingMeters(plan)
+    },
+    summary: {
+      routeIds: plan.routeIds || (plan.route?.id ? [plan.route.id] : []),
+      busCount: Array.isArray(plan.legs) ? plan.legs.length : 1,
+      transferCount: Math.max(0, (Array.isArray(plan.legs) ? plan.legs.length : 1) - 1),
+      totalWalkingMeters: totalWalkingMeters(plan),
+      destinationArrivalMs,
+      scheduledDestinationArrivalMs: plan.timings.scheduledDestinationArrivalMs || destinationArrivalMs
     },
     status: plan.status
   };
@@ -921,11 +953,18 @@ function tripChoices(plans) {
 }
 
 function totalWalkingMeters(plan) {
+  if (Number.isFinite(Number(plan?.totalWalkingMeters))) return Number(plan.totalWalkingMeters);
   return Number(plan?.walking?.toBoard?.distanceMeters || 0)
+    + Number(plan?.walking?.transfer?.distanceMeters || 0)
     + Number(plan?.walking?.fromExit?.distanceMeters || 0);
 }
 
 function journeyOptionKey(plan) {
+  if (Array.isArray(plan.legs) && plan.legs.length) {
+    return plan.legs
+      .map((leg) => `${leg.route.id}:${leg.route.directionId}:${leg.route.headsign}:${leg.boardingStop.id}:${leg.exitStop.id}`)
+      .join(">");
+  }
   return [
     plan.route.id,
     plan.route.directionId,
@@ -933,6 +972,25 @@ function journeyOptionKey(plan) {
     plan.boardingStop.id,
     plan.exitStop.id
   ].join("|");
+}
+
+function journeyChoices(plans) {
+  const available = plans.filter((plan) => plan.status !== "miss");
+  const pool = available.length ? available : plans;
+  const groups = new Map();
+  for (const plan of pool) {
+    const key = journeyOptionKey(plan);
+    const existing = groups.get(key);
+    if (!existing || plan.score < existing.score) groups.set(key, plan);
+  }
+  return [...groups.values()]
+    .sort((a, b) => {
+      return totalWalkingMeters(a) - totalWalkingMeters(b)
+        || (a.legs?.length || 1) - (b.legs?.length || 1)
+        || a.timings.exitArrivalMs - b.timings.exitArrivalMs
+        || a.score - b.score;
+    })
+    .slice(0, 6);
 }
 
 function leastWalkingTripChoices(plans) {
@@ -974,6 +1032,239 @@ function selectedChoiceIndex(choices, choiceOffset = 0, targetArrivalMs = NaN) {
     base = targetIndex >= 0 ? targetIndex : choices.length - 1;
   }
   return clamp(base + Math.trunc(Number(choiceOffset) || 0), 0, choices.length - 1);
+}
+
+function predictedExitMs(plan) {
+  const delayMs = Number(plan?.timings?.busArrivalMs || 0) - Number(plan?.timings?.scheduledBusArrivalMs || 0);
+  return Number(plan?.timings?.exitArrivalMs || 0) + (Number.isFinite(delayMs) ? delayMs : 0);
+}
+
+function routeLabel(routeIds) {
+  return routeIds.map((routeId) => `Route ${routeId}`).join(" + ");
+}
+
+function transferPoint(stop) {
+  return {
+    id: `transfer-${stop.id || stop.code}`,
+    name: stop.name || "Transfer stop",
+    label: stop.name || "Transfer stop",
+    address: "",
+    lat: stop.lat,
+    lng: stop.lng
+  };
+}
+
+function planLeg(plan, index) {
+  return {
+    index,
+    route: plan.route,
+    boardingStop: plan.boardingStop,
+    exitStop: plan.exitStop,
+    timings: {
+      busArrivalMs: plan.timings.busArrivalMs,
+      scheduledBusArrivalMs: plan.timings.scheduledBusArrivalMs,
+      exitArrivalMs: predictedExitMs(plan),
+      scheduledExitArrivalMs: plan.timings.exitArrivalMs,
+      serviceDate: plan.timings.serviceDate
+    },
+    walking: {
+      toBoard: {
+        distanceMeters: plan.walking.toBoard.distanceMeters,
+        durationSeconds: plan.walking.toBoard.durationSeconds,
+        source: plan.walking.toBoard.source
+      },
+      fromExit: {
+        distanceMeters: plan.walking.fromExit.distanceMeters,
+        durationSeconds: plan.walking.fromExit.durationSeconds,
+        source: plan.walking.fromExit.source
+      }
+    },
+    stopCount: plan.stopCount,
+    stopWindow: plan.stopWindow || [],
+    prediction: plan.prediction || null
+  };
+}
+
+function transferStopPairs(firstRoute, secondRoute) {
+  const pairs = [];
+  for (const fromStop of firstRoute.stops || []) {
+    if (!Number.isFinite(fromStop.lat) || !Number.isFinite(fromStop.lng)) continue;
+    for (const toStop of secondRoute.stops || []) {
+      if (!Number.isFinite(toStop.lat) || !Number.isFinite(toStop.lng)) continue;
+      const distanceMeters = fromStop.id === toStop.id ? 0 : haversineMeters(fromStop, toStop);
+      if (distanceMeters > MAX_TRANSFER_WALK_METERS) continue;
+      const hubBonus = /central hub|union station/i.test(`${fromStop.name} ${toStop.name}`) ? -250 : 0;
+      pairs.push({
+        firstRoute,
+        secondRoute,
+        fromStop,
+        toStop,
+        distanceMeters,
+        score: distanceMeters + hubBonus
+      });
+    }
+  }
+  return pairs.sort((a, b) => a.score - b.score).slice(0, MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR);
+}
+
+async function transferRouteCandidates(origin, destination) {
+  const previews = await routePreviews(origin, destination, null);
+  const firstIds = previews
+    .slice()
+    .sort((a, b) => a.nearestBoardMeters - b.nearestBoardMeters)
+    .slice(0, MAX_TRANSFER_FIRST_ROUTES)
+    .map((preview) => preview.routeId);
+  const secondIds = previews
+    .slice()
+    .sort((a, b) => a.nearestExitMeters - b.nearestExitMeters)
+    .slice(0, MAX_TRANSFER_SECOND_ROUTES)
+    .map((preview) => preview.routeId);
+  const routeIds = [...new Set([...firstIds, ...secondIds, ...TRACKED_ROUTE_IDS])];
+  const routeResults = await mapLimit(routeIds, 4, async (routeId) => getRouteData(routeId));
+  const routeById = new Map(routeResults
+    .filter((result) => result.ok && result.value?.routeId)
+    .map((result) => [result.value.routeId, result.value]));
+  return {
+    previews,
+    firstRoutes: firstIds.map((routeId) => routeById.get(routeId)).filter(Boolean),
+    secondRoutes: secondIds.map((routeId) => routeById.get(routeId)).filter(Boolean)
+  };
+}
+
+function combineTransferPlan(firstPlan, secondPlan, transferWalk, nowMs) {
+  const routeIds = [firstPlan.route.id, secondPlan.route.id];
+  const firstLeg = planLeg(firstPlan, 1);
+  const secondLeg = planLeg(secondPlan, 2);
+  const transferReadyMs = predictedExitMs(firstPlan) + Math.round(Number(transferWalk.durationSeconds || 0) * 1000) + MIN_TRANSFER_MS;
+  const scheduledDestinationArrivalMs = secondPlan.timings.exitArrivalMs
+    + Math.round(Number(secondPlan.walking.fromExit.durationSeconds || 0) * 1000);
+  const destinationArrivalMs = predictedExitMs(secondPlan)
+    + Math.round(Number(secondPlan.walking.fromExit.durationSeconds || 0) * 1000);
+  const totalWalkingMetersValue = Number(firstPlan.walking.toBoard.distanceMeters || 0)
+    + Number(transferWalk.distanceMeters || 0)
+    + Number(secondPlan.walking.toBoard.distanceMeters || 0)
+    + Number(secondPlan.walking.fromExit.distanceMeters || 0);
+  const totalWalkingSeconds = Number(firstPlan.walking.toBoard.durationSeconds || 0)
+    + Number(transferWalk.durationSeconds || 0)
+    + Number(secondPlan.walking.toBoard.durationSeconds || 0)
+    + Number(secondPlan.walking.fromExit.durationSeconds || 0);
+  const firstWaitSeconds = Math.max(0, (firstPlan.timings.busArrivalMs - nowMs) / 1000);
+  const transferWaitSeconds = Math.max(0, (secondPlan.timings.busArrivalMs - transferReadyMs) / 1000);
+
+  return {
+    generatedAt: firstPlan.generatedAt,
+    kind: "transfer",
+    destination: secondPlan.destination,
+    origin: firstPlan.origin,
+    status: firstPlan.status === "miss" || secondPlan.status === "miss" ? "miss" : secondPlan.status,
+    route: {
+      id: routeIds.join(" + "),
+      lineId: firstPlan.route.lineId,
+      name: routeLabel(routeIds),
+      headsign: secondPlan.route.headsign,
+      directionId: "",
+      shapeId: "",
+      tripId: `${firstPlan.route.tripId}+${secondPlan.route.tripId}`
+    },
+    routeIds,
+    boardingStop: firstPlan.boardingStop,
+    exitStop: secondPlan.exitStop,
+    previousStop: secondPlan.previousStop,
+    timings: {
+      leaveByMs: firstPlan.timings.leaveByMs,
+      standByMs: firstPlan.timings.standByMs,
+      busArrivalMs: firstPlan.timings.busArrivalMs,
+      scheduledBusArrivalMs: firstPlan.timings.scheduledBusArrivalMs,
+      secondBusArrivalMs: secondPlan.timings.busArrivalMs,
+      scheduledSecondBusArrivalMs: secondPlan.timings.scheduledBusArrivalMs,
+      transferReadyMs,
+      exitArrivalMs: predictedExitMs(secondPlan),
+      scheduledExitArrivalMs: secondPlan.timings.exitArrivalMs,
+      destinationArrivalMs,
+      scheduledDestinationArrivalMs,
+      pullCordAtMs: secondPlan.timings.pullCordAtMs,
+      serviceDate: firstPlan.timings.serviceDate
+    },
+    walking: {
+      toBoard: firstPlan.walking.toBoard,
+      transfer: transferWalk,
+      fromExit: secondPlan.walking.fromExit
+    },
+    totalWalkingMeters: totalWalkingMetersValue,
+    totalWalkingSeconds,
+    vehicle: null,
+    legs: [firstLeg, secondLeg],
+    transfers: [{
+      fromStop: firstPlan.exitStop,
+      toStop: secondPlan.boardingStop,
+      walking: transferWalk,
+      readyMs: transferReadyMs
+    }],
+    stopWindow: [...(firstPlan.stopWindow || []), ...(secondPlan.stopWindow || [])],
+    stopCount: Number(firstPlan.stopCount || 0) + Number(secondPlan.stopCount || 0),
+    prediction: firstPlan.prediction || null,
+    score: totalWalkingSeconds * 1.45
+      + firstWaitSeconds * 0.18
+      + transferWaitSeconds * 0.3
+      + Math.max(0, (destinationArrivalMs - nowMs) / 1000) * 0.015
+      + 480
+  };
+}
+
+async function createTransferPlans(origin, destination, nowMs, sources) {
+  const routeCandidates = await transferRouteCandidates(origin, destination);
+  const candidates = [];
+  for (const firstRoute of routeCandidates.firstRoutes) {
+    for (const secondRoute of routeCandidates.secondRoutes) {
+      if (!firstRoute || !secondRoute || firstRoute.routeId === secondRoute.routeId) continue;
+      for (const pair of transferStopPairs(firstRoute, secondRoute)) {
+        candidates.push(pair);
+      }
+    }
+  }
+  candidates.sort((a, b) => a.score - b.score);
+
+  const plans = [];
+  for (const candidate of candidates.slice(0, MAX_TRANSFER_PLANS)) {
+    try {
+      const firstResult = await createPlan(
+        origin,
+        candidate.fromStop.id || "transfer",
+        nowMs,
+        candidate.firstRoute.routeId,
+        transferPoint(candidate.fromStop),
+        { allowTransfers: false, skipLive: true, boardLimit: 3, exitLimit: 2, departureLimit: 4 }
+      );
+      const firstPlan = firstResult.plan;
+      if (!firstPlan) continue;
+      const transferWalk = await walkingRoute(firstPlan.exitStop, candidate.toStop);
+      if (transferWalk.distanceMeters > MAX_TRANSFER_WALK_METERS) continue;
+      const transferReadyMs = predictedExitMs(firstPlan)
+        + Math.round(Number(transferWalk.durationSeconds || 0) * 1000)
+        + MIN_TRANSFER_MS;
+      const secondResult = await createPlan(
+        candidate.toStop,
+        destination.id || "destination",
+        transferReadyMs,
+        candidate.secondRoute.routeId,
+        destination,
+        { allowTransfers: false, skipLive: true, boardLimit: 2, exitLimit: 3, departureLimit: 4 }
+      );
+      const secondPlan = secondResult.plan;
+      if (!secondPlan) continue;
+      plans.push(combineTransferPlan(firstPlan, secondPlan, transferWalk, nowMs));
+    } catch {
+      // Transfer options are opportunistic; direct plans remain available.
+    }
+  }
+
+  if (plans.length) {
+    sources.push(sourceStatus("WRTA transfer search", true, {
+      options: plans.length,
+      routeCandidates: [...new Set(plans.flatMap((plan) => plan.routeIds || []))]
+    }));
+  }
+  return plans;
 }
 
 async function routeCandidatesForPlan(origin, destination, routeId) {
@@ -1022,9 +1313,9 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   const possiblePlans = [];
   let boardCandidateCount = 0;
   let exitCandidateCount = 0;
-  const boardLimit = routeSelection.auto ? MAX_AUTO_BOARD_CANDIDATES : MAX_BOARD_CANDIDATES;
-  const exitLimit = routeSelection.auto ? MAX_AUTO_EXIT_CANDIDATES : MAX_EXIT_CANDIDATES;
-  const departureLimit = routeSelection.auto ? MAX_AUTO_DEPARTURES_PER_STOP : MAX_DEPARTURES_PER_STOP;
+  const boardLimit = options.boardLimit || (routeSelection.auto ? MAX_AUTO_BOARD_CANDIDATES : MAX_BOARD_CANDIDATES);
+  const exitLimit = options.exitLimit || (routeSelection.auto ? MAX_AUTO_EXIT_CANDIDATES : MAX_EXIT_CANDIDATES);
+  const departureLimit = options.departureLimit || (routeSelection.auto ? MAX_AUTO_DEPARTURES_PER_STOP : MAX_DEPARTURES_PER_STOP);
 
   for (const { route } of routeSelection.routes) {
     const stopById = route.stopById;
@@ -1161,23 +1452,32 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
     }
   }
 
+  const transferPlans = routeSelection.auto && options.allowTransfers !== false
+    ? await createTransferPlans(origin, destination, nowMs, sources)
+    : [];
+  const allPlans = [...possiblePlans, ...transferPlans];
   possiblePlans.sort((a, b) => a.score - b.score);
-  const choices = routeSelection.auto ? leastWalkingTripChoices(possiblePlans) : tripChoices(possiblePlans);
+  allPlans.sort((a, b) => a.score - b.score);
+  const choices = routeSelection.auto ? journeyChoices(allPlans) : tripChoices(possiblePlans);
   const planIndex = selectedChoiceIndex(choices, options.choiceOffset, options.targetArrivalMs);
   const plan = planIndex >= 0 ? choices[planIndex] : null;
 
   if (plan) {
+    const liveRoute = Array.isArray(plan.legs) && plan.legs.length ? plan.legs[0].route : plan.route;
     sources.push(sourceStatus(`Ride Guide route ${plan.route.id} schedule`, true));
-    const live = await getLiveVehicles(plan.route.id, plan.route.lineId);
-    plan.vehicle = matchVehicle(live.vehicles, plan.route.headsign);
-    sources.push(live.status);
+    if (!options.skipLive) {
+      const live = await getLiveVehicles(liveRoute.id, liveRoute.lineId);
+      plan.vehicle = matchVehicle(live.vehicles, liveRoute.headsign);
+      sources.push(live.status);
+    }
   } else {
     sources.push(sourceStatus("Ride Guide candidate schedules", false, { detail: "no feasible plan" }));
   }
 
-  const walkingOk = plan ? plan.walking.toBoard.sourceOk && plan.walking.fromExit.sourceOk : false;
+  const walkingOk = plan ? plan.walking.toBoard.sourceOk !== false && plan.walking.fromExit.sourceOk !== false && plan.walking.transfer?.sourceOk !== false : false;
   sources.push(sourceStatus("OSRM walking", walkingOk, plan ? {
     toBoardSource: plan.walking.toBoard.source,
+    transferSource: plan.walking.transfer?.source || "",
     fromExitSource: plan.walking.fromExit.source,
     totalWalkingMeters: Math.round(totalWalkingMeters(plan))
   } : { detail: "no plan" }));
@@ -1206,7 +1506,8 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
       routeCandidates: routeSelection.routes.length,
       boardingStops: boardCandidateCount,
       exitStops: exitCandidateCount,
-      feasiblePlans: possiblePlans.length
+      feasiblePlans: possiblePlans.length,
+      transferPlans: transferPlans.length
     }
   };
 }

@@ -322,14 +322,16 @@ h1 {
 
 .location-list,
 .bus-list,
-.arrival-list {
+.arrival-list,
+.option-list {
   display: grid;
   gap: 6px;
 }
 
 .location-row,
 .bus-row,
-.arrival-row {
+.arrival-row,
+.option-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
@@ -345,13 +347,15 @@ h1 {
 
 .location-row,
 .bus-row,
-.arrival-row {
+.arrival-row,
+.option-row {
   grid-template-columns: minmax(0, 1fr);
 }
 
 .location-row strong,
 .bus-row strong,
-.arrival-row strong {
+.arrival-row strong,
+.option-row strong {
   min-width: 0;
   font-size: .96rem;
   line-height: 1.15;
@@ -361,6 +365,7 @@ h1 {
 .location-row span,
 .bus-row span,
 .arrival-row span,
+.option-row span,
 .selected-panel > span {
   min-width: 0;
   color: var(--muted);

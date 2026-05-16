@@ -135,7 +135,7 @@
 \end{center}
 
 \vspace{0.35em}
-\noindent\textbf{Live bus trackers expose route, vehicle, stop, and prediction data, but a rider may still need to translate those data into a personal action. We built a location-first WRTA interface that binds saved Worcester destinations to nearby stops, live buses, route geometry, current location, and walking estimates on one stable map. The contribution is not a new transit authority data source. It is a source-bounded interaction layer that separates official stop-time predictions from derived destination-arrival estimates, reduces map interpretation work, and makes uncertainty visible for a rider who wants fewer choices and less context switching.}
+\noindent\textbf{Live bus trackers expose route, vehicle, stop, and prediction data, but a rider may still need to translate those data into a personal action. We built a location-first WRTA interface that binds saved Worcester destinations to nearby stops, direct and one-transfer bus options, route geometry, current location, and walking estimates on one stable map. The contribution is not a new transit authority data source. It is a source-bounded interaction layer that separates official stop-time predictions from derived destination-arrival estimates, reduces map interpretation work, and makes uncertainty visible for a rider who wants fewer choices and less context switching.}
 
 \newpage
 \pagestyle{fancy}
@@ -144,7 +144,7 @@
 
 Public transit information systems often contain the necessary facts without presenting the specific fact a rider needs in the moment. The official Worcester Regional Transit Authority (WRTA) tracker provides the live vehicle and route surface for WRTA service \cite{wrtaTracker,wrtaHome}. For a rider deciding whether to leave, wait, board, or keep watching the map, however, the tracker still leaves a translation step: identify the relevant stop, connect that stop to the destination, decide which route direction matters, infer whether the moving vehicle is the one to catch, and convert an arrival prediction into a personal action.
 
-The AO Labs bus tracker was built as a narrower interface for that translation. The public version at `bus.aolabs.io' tracks WRTA routes 2, 3, 4, and 31 and six fixed Worcester-area destinations: 96 William Street, Alden Hall, Union Station, Chipotle on Park Avenue, Cold Stone on Main Street, and Blackstone Theaters. It uses WRTA live and stop-time surfaces, Ride Guide route and stop geometry, OpenStreetMap tiles, browser geolocation, Leaflet rendering, and OSRM walking estimates \cite{rideGuide,gtfsSchedule,gtfsRealtimeBestPractices,osm,leaflet,geolocationApi,osrm}. The app is therefore not authoritative beyond the sources it reads. It is a personal layer that narrows those sources into one map and a short set of labeled times.
+The AO Labs bus tracker was built as a narrower interface for that translation. The public version at `bus.aolabs.io' keeps a focused live-bus surface for familiar WRTA routes and six fixed Worcester-area destinations: 96 William Street, Alden Hall, Union Station, Chipotle on Park Avenue, Cold Stone on Main Street, and Blackstone Theaters. It uses WRTA live and stop-time surfaces, Ride Guide route, stop, and schedule geometry, OpenStreetMap tiles, browser geolocation, Leaflet rendering, and OSRM walking estimates \cite{rideGuide,gtfsSchedule,gtfsRealtimeBestPractices,osm,leaflet,geolocationApi,osrm}. The app is therefore not authoritative beyond the sources it reads. It is a personal layer that narrows those sources into one map and a short set of labeled trip options.
 
 The design motivation is neurodivergent fit. The intended rider has self-reported autism and ADHD and wants the interface to remove repeated interpretation work rather than ask for more manual planning. This paper therefore treats cognitive load as an engineering requirement: keep the map visible, keep the screen stable, name the stop, show the route, show the live bus, distinguish stop time from destination time, and avoid alarm-like interaction patterns. General web accessibility standards also emphasize predictable, operable, and understandable interfaces, but this paper makes a narrower claim: a personal transit layer can be better for a specific rider by reducing avoidable interpretation \cite{wcag22}.
 
@@ -152,12 +152,12 @@ The design motivation is neurodivergent fit. The intended rider has self-reporte
 
 \subsection{A stable, location-first map changes the task}
 
-The WRTA tracker is route-first: routes and vehicles are the primary objects. The AO Labs interface is location-first: a selected place reframes the map around the rider's current location, the selected destination, the boarding stop chosen from that current location, the exit stop near the destination, route geometry, and live buses when browser GPS is available (Fig.~\ref{fig:bus_interface}). This changes the task from inspecting the transit network to answering a personal question: which stop, route, and bus time matter for this trip?
+The WRTA tracker is route-first: routes and vehicles are the primary objects. The AO Labs interface is location-first: a selected place reframes the map around the rider's current location, the selected destination, the boarding stop chosen from that current location, any required transfer, the exit stop near the destination, route geometry, and live buses when browser GPS is available (Fig.~\ref{fig:bus_interface}). This changes the task from inspecting the transit network to answering a personal question: which stop, route sequence, and bus time matter for this trip?
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.96\textwidth]{bus-interface.png}
-    \caption{Stable live interface for selected WRTA destinations. The public app keeps saved destinations, route geometry, bus-stop symbols, live-bus state, and current-location state on one map while the side panel keeps boarding-stop and arrival rows in the same view. In this capture, simulated browser geolocation near Park Avenue and Sagamore Road selects Park Ave + Sagamore St as the boarding stop for a trip to 96 William Street, while Elm St + Russell St remains the exit-side stop. The timing row separates WRTA-derived bus arrival at the boarding stop from the derived destination-arrival estimate.}
+    \caption{Stable live interface for selected WRTA destinations. The public app keeps saved destinations, route geometry, bus-stop symbols, live-bus state, and current-location state on one map while the side panel keeps the selected trip and alternative options in the same view. In this capture, simulated browser geolocation at Alden Hall selects a Route 3 to Route 4 trip to Blackstone Theaters, with Central Hub as the transfer point. The timing rows separate WRTA-derived bus arrivals at each boarding stop from the derived destination-arrival estimate.}
     \label{fig:bus_interface}
 \end{figure}
 
@@ -170,10 +170,10 @@ The WRTA tracker is route-first: routes and vehicles are the primary objects. Th
 Task & WRTA tracker & AO Labs bus tracker \\
 \midrule
 Primary object & Route and system map & Saved place or selected destination \\
-Stop selection & Interpreted by rider & GPS-based boarding stop, exit stop, or labeled fallback \\
+Stop selection & Interpreted by rider & GPS-based boarding stop, transfer stop, exit stop, or labeled fallback \\
 Location context & Not personalized by default & Current location shown when browser GPS is available \\
-Timing row & Stop prediction surface & Bus-at-stop time plus derived destination estimate \\
-Map behavior & General live operations view & Selected-place framing with route and stop context \\
+Timing row & Stop prediction surface & Bus-at-stop time, transfer sequence, and derived destination estimate \\
+Map behavior & General live operations view & Selected-place framing with route, transfer, and stop context \\
 Authority & Official WRTA surface & WRTA-derived, route-bounded, not authoritative beyond sources \\
 \bottomrule
 \end{tabular}
@@ -187,7 +187,7 @@ This separation prevents the app from overstating certainty. The first value is 
 
 \subsection{The design removes repeated interpretation work}
 
-The app is better than a general tracker for this personal use case because it removes specific repeated burdens. The rider does not need to count vague map distances, identify a stop from an unlabeled route line, infer whether a location pin is connected to a route, or wait for a static bus marker to jump after the next feed update. The app renders route paths, bus-stop symbols, live buses, place icons, and current location together, and it interpolates live bus markers between source updates so the vehicle appears to move continuously while still depending on WRTA data.
+The app is better than a general tracker for this personal use case because it removes specific repeated burdens. The rider does not need to count vague map distances, identify a stop from an unlabeled route line, infer whether a location pin is connected to a route, decide whether a long walk is being substituted for a missing transfer, or wait for a static bus marker to jump after the next feed update. The app renders route paths, bus-stop symbols, transfer context, live buses, place icons, and current location together, and it interpolates live bus markers between source updates so the vehicle appears to move continuously while still depending on WRTA data.
 
 The interface also avoids disruptive alerts. It does not use vibration, audio, popups, emergency warnings, or alarm-like notifications. This is not a cosmetic choice. For a rider who is already tracking a bus, walking, and managing uncertainty, a calm persistent screen can be more usable than a system that interrupts attention.
 
@@ -201,13 +201,13 @@ This work shows that a transit interface can improve utility by reducing interpr
 
 The app also demonstrates a useful boundary for AI- or automation-adjacent personal tools: the system should not invent certainty. The correct design is not to promise exact destination arrival. It is to show the stop prediction, show the walking basis, compute a clear derived estimate, and keep the source boundary visible. This makes the app calmer and more trustworthy because the rider can see which parts are official data and which parts are personal context.
 
-Several limitations remain. The public app currently focuses on four routes, six saved destinations, and nearby stops on those routes. Browser geolocation may be blocked or unavailable depending on device, browser, operating system, and permission state. WRTA stop predictions can be absent, stale, or changed by operations. OSRM walking routes may not match the exact path a rider chooses. No controlled user study has yet measured missed buses, time saved, stress, or reduction in interpretation errors. Until those observations exist, the paper presents the app as a source-bounded product and design record, not a population-level accessibility result.
+Several limitations remain. The public app currently focuses on six saved destinations, a focused live-bus surface, and direct or one-transfer trip options rather than full-system itinerary optimization. Browser geolocation may be blocked or unavailable depending on device, browser, operating system, and permission state. WRTA stop predictions can be absent, stale, or changed by operations. OSRM walking routes may not match the exact path a rider chooses. No controlled user study has yet measured missed buses, time saved, stress, or reduction in interpretation errors. Until those observations exist, the paper presents the app as a source-bounded product and design record, not a population-level accessibility result.
 
 \section{Materials and Methods}
 
 \subsection{System}
 
-The app is a Node.js web service deployed at `https://bus.aolabs.io/'. The browser client renders a Leaflet map with OpenStreetMap tiles. The public tracked route set is 2, 3, 4, and 31. Saved destinations are fixed latitude-longitude records in the application source. The server exposes JSON endpoints for route geometry, live vehicles, trip planning, selected-location arrivals, walking routes, destination geocoding, and health state.
+The app is a Node.js web service deployed at `https://bus.aolabs.io/'. The browser client renders a Leaflet map with OpenStreetMap tiles. Saved destinations are fixed latitude-longitude records in the application source. The server exposes JSON endpoints for route geometry, live vehicles, trip planning, selected-location arrivals, walking routes, destination geocoding, and health state.
 
 \subsection{Transit sources}
 
@@ -215,21 +215,21 @@ Live vehicle state is read from the WRTA SWIV service. Stop arrivals are read fr
 
 \subsection{Boarding-stop selection}
 
-For a selected saved destination, the primary path uses browser GPS as the trip origin. The server searches only the tracked route set, evaluates feasible boarding and exit stop pairs, and selects among the least-walking candidates. The UI displays the boarding stop from the current location, the exit stop near the selected place, route context, and upcoming stop arrivals. If GPS is unavailable, the app uses a labeled location-nearest fallback instead of implying that the fallback is the rider's boarding stop.
+For a selected saved destination, the primary path uses browser GPS as the trip origin. The server evaluates direct trips and one-transfer trips from WRTA route candidates, searches feasible boarding, transfer, and exit stop combinations, and ranks options with walking distance as the primary burden. The UI displays the boarding stop from the current location, the transfer stop when needed, the exit stop near the selected place, route context, and upcoming stop arrivals. If GPS is unavailable, the app uses a labeled location-nearest fallback instead of implying that the fallback is the rider's boarding stop.
 
 \subsection{Destination-arrival estimate}
 
-For each selected trip, the server obtains upcoming stop times for the selected boarding stop and requests OSRM walking routes from the current location to the boarding stop and from the exit stop to the selected destination. Destination arrival is calculated as
+For each selected trip, the server obtains upcoming stop times for each selected boarding stop and requests OSRM walking routes from the current location to the first boarding stop, between transfer stops when needed, and from the exit stop to the selected destination. Destination arrival for a two-bus trip is calculated as
 
 \[
-T_{\mathrm{destination}} = T_{\mathrm{board}} + D_{\mathrm{ride}} + D_{\mathrm{exit\ walk}},
+T_{\mathrm{destination}} = T_{\mathrm{board1}} + D_{\mathrm{ride1}} + D_{\mathrm{transfer}} + W_{\mathrm{transfer}} + D_{\mathrm{ride2}} + D_{\mathrm{exit\ walk}},
 \]
 
-where \(T_{\mathrm{board}}\) is the WRTA-derived boarding-stop time, \(D_{\mathrm{ride}}\) is the scheduled in-vehicle travel time between the boarding and exit stops, and \(D_{\mathrm{exit\ walk}}\) is the OSRM walking duration from the exit stop to the selected place. If OSRM fails, the server falls back to a straight-line walking estimate at the configured walking speed of 1.34 m s\(^{-1}\). The UI labels destination arrival as a source-bounded derived estimate rather than an official WRTA prediction.
+where \(T_{\mathrm{board1}}\) is the WRTA-derived first boarding-stop time, \(D_{\mathrm{ride1}}\) and \(D_{\mathrm{ride2}}\) are scheduled in-vehicle travel times, \(D_{\mathrm{transfer}}\) is the scheduled wait after the transfer walk, \(W_{\mathrm{transfer}}\) is the transfer walking duration, and \(D_{\mathrm{exit\ walk}}\) is the OSRM walking duration from the exit stop to the selected place. Direct trips are the same expression with the transfer terms removed. If OSRM fails, the server falls back to a straight-line walking estimate at the configured walking speed of 1.34 m s\(^{-1}\). The UI labels destination arrival as a source-bounded derived estimate rather than an official WRTA prediction.
 
 \subsection{Visual verification}
 
-The screenshot in Figure~\ref{fig:bus_interface} was generated from the local app at desktop width using simulated browser geolocation near Park Avenue and Sagamore Road with 96 William Street selected. This verifies that the public interaction model has the expected ingredients: current-location marker, selected destination, highlighted route path, bus-stop symbols, live-bus layer, boarding-stop panel, and separate bus-at-stop and destination-arrival fields.
+The screenshot in Figure~\ref{fig:bus_interface} was generated from the local app at desktop width using simulated browser geolocation at Alden Hall with Blackstone Theaters selected. This verifies that the public interaction model has the expected ingredients: current-location marker, selected destination, highlighted multi-leg route path, bus-stop symbols, live-bus layer, trip-option panel, transfer label, and separate bus-at-stop and destination-arrival fields.
 
 \section{Acknowledgements}
 
