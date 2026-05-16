@@ -812,7 +812,18 @@ async function closestTrackedStop(point, routeIds = TRACKED_ROUTE_IDS, nowMs = D
     }
   }
   if (!best) return null;
-  const arrivals = await stopArrivals(best.stop, routes.map((route) => ({ route })), nowMs);
+  const walkFromStop = await walkingRoute(best.stop, point);
+  const arrivals = (await stopArrivals(best.stop, routes.map((route) => ({ route })), nowMs))
+    .map((arrival) => {
+      const destinationArrivalMs = Number(arrival.predictedMs) + Math.round(Number(walkFromStop.durationSeconds || 0) * 1000);
+      return {
+        ...arrival,
+        destinationArrivalMs,
+        destinationMinutes: formatMinutesFromNow(destinationArrivalMs, nowMs),
+        walkFromStopSeconds: walkFromStop.durationSeconds,
+        walkFromStopMeters: walkFromStop.distanceMeters
+      };
+    });
   return {
     route: {
       id: best.route.routeId,
@@ -823,6 +834,12 @@ async function closestTrackedStop(point, routeIds = TRACKED_ROUTE_IDS, nowMs = D
     stop: {
       ...compactStop(best.stop),
       distanceMeters: best.distanceMeters
+    },
+    walkFromStop: {
+      distanceMeters: walkFromStop.distanceMeters,
+      durationSeconds: walkFromStop.durationSeconds,
+      source: walkFromStop.source,
+      sourceOk: walkFromStop.sourceOk
     },
     arrivals
   };
@@ -1298,7 +1315,10 @@ async function handleApi(req, res, requestUrl) {
       ...result,
       sources: [
         sourceStatus("WRTA nearest tracked stop", Boolean(result)),
-        sourceStatus("WRTA stop times", Boolean(result?.arrivals?.length), { count: result?.arrivals?.length || 0 })
+        sourceStatus("WRTA stop times", Boolean(result?.arrivals?.length), { count: result?.arrivals?.length || 0 }),
+        sourceStatus("OSRM walk from stop", Boolean(result?.walkFromStop?.sourceOk), {
+          source: result?.walkFromStop?.source || ""
+        })
       ]
     });
     return true;

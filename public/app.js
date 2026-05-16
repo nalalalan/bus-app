@@ -300,17 +300,31 @@ function renderSelectedStop(data = null, context = {}) {
     els.selectedStopDetail.textContent = `Exit stop for ${location?.name || "location"}; ${distanceFeet} ft from place`;
   }
   els.arrivalList.innerHTML = (data.arrivals || []).length
-    ? data.arrivals.map((arrival) => (
-      `<div class="arrival-row">
-        <strong>${escapeHtml(timeFormatter.format(new Date(arrival.predictedMs)))}</strong>
-        <span>Route ${escapeHtml(arrival.routeId)} at this stop to ${escapeHtml(arrival.destination || "destination")} - ${escapeHtml(arrival.minutes || "")}</span>
-      </div>`
-    )).join("")
+    ? data.arrivals.map((arrival) => {
+      const busAtStop = timeFormatter.format(new Date(arrival.predictedMs));
+      const destinationAt = arrival.destinationArrivalMs
+        ? timeFormatter.format(new Date(arrival.destinationArrivalMs))
+        : "";
+      const placeName = location?.name || "destination";
+      const routeText = `Route ${arrival.routeId} to ${arrival.destination || "destination"}`;
+      const walkText = arrival.walkFromStopSeconds ? formatWalkSeconds(arrival.walkFromStopSeconds) : "";
+      const destinationText = destinationAt ? `Arrive at ${placeName} ${destinationAt}` : `Arrive at ${placeName}`;
+      const detailParts = [destinationText, walkText, routeText].filter(Boolean);
+      return `<div class="arrival-row">
+        <strong>Bus at stop ${escapeHtml(busAtStop)}</strong>
+        <span>${escapeHtml(detailParts.join("; "))}</span>
+      </div>`;
+    }).join("")
     : `<div class="arrival-row muted"><strong>No WRTA times</strong><span>${escapeHtml(stop.name || "")}</span></div>`;
 }
 
 function setStatus(text) {
   els.statusText.textContent = text;
+}
+
+function formatWalkSeconds(seconds) {
+  const minutes = Math.max(1, Math.round(Number(seconds || 0) / 60));
+  return `${minutes} min walk`;
 }
 
 function renderGpsButton() {
