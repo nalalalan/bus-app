@@ -91,6 +91,20 @@ const minuteTimeFormatter = new Intl.DateTimeFormat("en-US", {
   hour: "numeric",
   minute: "2-digit"
 });
+const dayKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit"
+});
+const datedMinuteTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit"
+});
 
 let map;
 let refreshTimer;
@@ -386,7 +400,11 @@ function setStatus(text) {
 function formatMinuteTime(ms) {
   const value = Number(ms);
   if (!Number.isFinite(value)) return "--";
-  return minuteTimeFormatter.format(new Date(Math.round(value / 60000) * 60000));
+  const date = new Date(Math.round(value / 60000) * 60000);
+  if (dayKeyFormatter.format(date) === dayKeyFormatter.format(new Date())) {
+    return minuteTimeFormatter.format(date);
+  }
+  return datedMinuteTimeFormatter.format(date);
 }
 
 function formatWalkSeconds(seconds) {
