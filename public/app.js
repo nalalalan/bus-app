@@ -380,7 +380,9 @@ function renderTripOptions(planData = selectedPlanData) {
   if (!els.optionList) return;
   const choices = planData?.choices || [];
   if (!choices.length) {
-    els.optionList.innerHTML = `<div class="option-row muted"><strong>No options yet</strong><span>Select a location</span></div>`;
+    const title = planData?.error ? "No low-walk options" : "No options yet";
+    const detail = planData?.error || "Select a location";
+    els.optionList.innerHTML = `<div class="option-row muted"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
     return;
   }
   els.optionList.innerHTML = choices.slice(0, 6).map((choice) => (
@@ -1203,10 +1205,13 @@ async function selectLocation(locationId, choiceIndex = 0) {
   } catch (error) {
     if (requestId !== selectedLocationRequestId) return;
     if (selectedStopLayer) selectedStopLayer.remove();
-    els.selectedStopName.textContent = "Stop unavailable";
+    const lowWalkMiss = String(error.message || "").toLowerCase().includes("no low-walk");
+    els.selectedStopName.textContent = lowWalkMiss ? "No low-walk trip today" : "Stop unavailable";
     els.selectedStopDetail.textContent = error.message;
     els.arrivalList.innerHTML = "";
-    setStatus("Stop unavailable");
+    selectedPlanData = { choices: [], error: error.message };
+    renderTripOptions();
+    setStatus(lowWalkMiss ? `${location.name} - no low-walk trip today` : "Stop unavailable");
   }
 }
 

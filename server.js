@@ -30,6 +30,9 @@ const MAX_TRANSFER_SECOND_ROUTES = 3;
 const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 1;
 const MAX_TRANSFER_PLANS = 7;
 const MAX_TRANSFER_WALK_METERS = 550;
+const MAX_AUTO_OPTION_WALK_METERS = 1609.344;
+const AUTO_SEARCH_DAYS_AHEAD = 0;
+const FIXED_ROUTE_SEARCH_DAYS_AHEAD = 1;
 const MIN_TRANSFER_MS = 3 * 60 * 1000;
 
 const destinations = {
@@ -430,6 +433,11 @@ function addDays(dateString, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function serviceDatesFrom(dateString, daysAhead) {
+  const count = Math.max(0, Math.floor(Number(daysAhead) || 0));
+  return Array.from({ length: count + 1 }, (_, index) => addDays(dateString, index));
+}
+
 function zonedTimeToUtcMs(dateString, hour, minute = 0, second = 0) {
   const [year, month, day] = dateString.split("-").map(Number);
   const targetUtc = Date.UTC(year, month - 1, day, hour, minute, second);
@@ -468,6 +476,10 @@ function haversineMeters(a, b) {
   const dLng = (b.lng - a.lng) * Math.PI / 180;
   const x = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * radius * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+function formatMiles(meters) {
+  return `${(Number(meters || 0) / 1609.344).toFixed(1)} mi`;
 }
 
 function cleanStopId(stopId) {
@@ -993,6 +1005,12 @@ function journeyChoices(plans) {
     .slice(0, 6);
 }
 
+function visibleAutoChoices(plans) {
+  return journeyChoices(plans)
+    .filter((plan) => totalWalkingMeters(plan) <= MAX_AUTO_OPTION_WALK_METERS)
+    .slice(0, 6);
+}
+
 function leastWalkingTripChoices(plans) {
   const available = plans.filter((plan) => plan.status !== "miss");
   const pool = available.length ? available : plans;
@@ -1233,7 +1251,7 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
         nowMs,
         candidate.firstRoute.routeId,
         transferPoint(candidate.fromStop),
-        { allowTransfers: false, skipLive: true, boardLimit: 3, exitLimit: 2, departureLimit: 4 }
+        { allowTransfers: false, skipLive: true, boardLimit: 3, exitLimit: 2, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
       );
       const firstPlan = firstResult.plan;
       if (!firstPlan) continue;
@@ -1248,7 +1266,7 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
         transferReadyMs,
         candidate.secondRoute.routeId,
         destination,
-        { allowTransfers: false, skipLive: true, boardLimit: 2, exitLimit: 3, departureLimit: 4 }
+        { allowTransfers: false, skipLive: true, boardLimit: 2, exitLimit: 3, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
       );
       const secondPlan = secondResult.plan;
       if (!secondPlan) continue;
@@ -1309,13 +1327,16 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   ];
 
   const today = localDateString(nowMs);
-  const tomorrow = addDays(today, 1);
   const possiblePlans = [];
   let boardCandidateCount = 0;
   let exitCandidateCount = 0;
   const boardLimit = options.boardLimit || (routeSelection.auto ? MAX_AUTO_BOARD_CANDIDATES : MAX_BOARD_CANDIDATES);
   const exitLimit = options.exitLimit || (routeSelection.auto ? MAX_AUTO_EXIT_CANDIDATES : MAX_EXIT_CANDIDATES);
   const departureLimit = options.departureLimit || (routeSelection.auto ? MAX_AUTO_DEPARTURES_PER_STOP : MAX_DEPARTURES_PER_STOP);
+  const searchDaysAhead = Number.isFinite(Number(options.searchDaysAhead))
+    ? Math.max(0, Math.floor(Number(options.searchDaysAhead)))
+    : routeSelection.auto ? AUTO_SEARCH_DAYS_AHEAD : FIXED_ROUTE_SEARCH_DAYS_AHEAD;
+  const departureDates = serviceDatesFrom(today, searchDaysAhead);
 
   for (const { route } of routeSelection.routes) {
     const stopById = route.stopById;
@@ -1338,13 +1359,14 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
       const boardStop = boardCandidate.stop;
       const walkToBoard = await walkingRoute(origin, boardStop);
       const walkSeconds = walkToBoard.durationSeconds;
-      const departureDates = [today, tomorrow];
       const departures = [];
       for (const serviceDate of departureDates) {
         try {
           const rows = await getDepartures(boardStop.id, serviceDate);
           for (const row of rows || []) {
-            if (row.routeId === route.routeId) departures.push(row);
+            if (row.routeId === route.routeId && (!row.serviceDate || row.serviceDate === serviceDate)) {
+              departures.push({ ...row, serviceDate: row.serviceDate || serviceDate });
+            }
           }
         } catch {
           sources.push(sourceStatus(`Ride Guide departures ${boardStop.code}`, false));
@@ -1458,7 +1480,18 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   const allPlans = [...possiblePlans, ...transferPlans];
   possiblePlans.sort((a, b) => a.score - b.score);
   allPlans.sort((a, b) => a.score - b.score);
-  const choices = routeSelection.auto ? journeyChoices(allPlans) : tripChoices(possiblePlans);
+  const unfilteredChoices = routeSelection.auto ? journeyChoices(allPlans) : tripChoices(possiblePlans);
+  const choices = routeSelection.auto ? visibleAutoChoices(allPlans) : unfilteredChoices;
+  const hiddenHighWalkChoices = routeSelection.auto
+    ? unfilteredChoices.filter((plan) => totalWalkingMeters(plan) > MAX_AUTO_OPTION_WALK_METERS)
+    : [];
+  if (routeSelection.auto) {
+    sources.push(sourceStatus("Trip option filter", true, {
+      searchDaysAhead,
+      maxWalkingMeters: Math.round(MAX_AUTO_OPTION_WALK_METERS),
+      hiddenHighWalkOptions: hiddenHighWalkChoices.length
+    }));
+  }
   const planIndex = selectedChoiceIndex(choices, options.choiceOffset, options.targetArrivalMs);
   const plan = planIndex >= 0 ? choices[planIndex] : null;
 
@@ -1471,7 +1504,9 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
       sources.push(live.status);
     }
   } else {
-    sources.push(sourceStatus("Ride Guide candidate schedules", false, { detail: "no feasible plan" }));
+    sources.push(sourceStatus("Ride Guide candidate schedules", false, {
+      detail: routeSelection.auto ? "no low-walk trip today" : "no feasible plan"
+    }));
   }
 
   const walkingOk = plan ? plan.walking.toBoard.sourceOk !== false && plan.walking.fromExit.sourceOk !== false && plan.walking.transfer?.sourceOk !== false : false;
@@ -1484,6 +1519,9 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
 
   return {
     ok: Boolean(plan),
+    error: plan ? "" : routeSelection.auto
+      ? `No low-walk trip today; options over ${formatMiles(MAX_AUTO_OPTION_WALK_METERS)} hidden`
+      : "No feasible plan",
     plan,
     selectedChoiceIndex: planIndex,
     choiceCount: choices.length,
@@ -1507,7 +1545,12 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
       boardingStops: boardCandidateCount,
       exitStops: exitCandidateCount,
       feasiblePlans: possiblePlans.length,
-      transferPlans: transferPlans.length
+      transferPlans: transferPlans.length,
+      hiddenHighWalkOptions: hiddenHighWalkChoices.length
+    },
+    policy: {
+      searchDaysAhead,
+      maxAutoOptionWalkingMeters: MAX_AUTO_OPTION_WALK_METERS
     }
   };
 }
