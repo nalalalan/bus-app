@@ -373,7 +373,14 @@ function choiceDetail(choice) {
   const walk = formatDistance(choice.summary?.totalWalkingMeters ?? choice.walking?.totalMeters);
   const arrival = formatMinuteTime(choice.summary?.destinationArrivalMs);
   const transfer = choice.summary?.transferCount ? `${choice.summary.transferCount} transfer` : "no transfer";
-  return `${walk} walk total; arrive ${arrival}; ${transfer}`;
+  const walkLegs = choice.summary?.transferCount
+    ? [
+        choice.walking?.toBoard?.distanceMeters ? `${formatDistance(choice.walking.toBoard.distanceMeters)} to bus` : "",
+        choice.walking?.transfer?.distanceMeters ? `${formatDistance(choice.walking.transfer.distanceMeters)} transfer` : "",
+        choice.walking?.fromExit?.distanceMeters ? `${formatDistance(choice.walking.fromExit.distanceMeters)} after bus` : ""
+      ].filter(Boolean).join("; ")
+    : "";
+  return `${walkLegs || `${walk} walk total`}; arrive ${arrival}; ${transfer}`;
 }
 
 function renderTripOptions(planData = selectedPlanData) {

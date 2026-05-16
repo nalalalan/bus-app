@@ -152,12 +152,12 @@ The design motivation is neurodivergent fit. The intended rider has self-reporte
 
 \subsection{A stable, location-first map changes the task}
 
-The WRTA tracker is route-first: routes and vehicles are the primary objects. The AO Labs interface is location-first: a selected place reframes the map around the rider's current location, the selected destination, the boarding stop chosen from that current location, any required transfer, the exit stop near the destination, route geometry, and live buses when browser GPS is available (Fig.~\ref{fig:bus_interface}). This changes the task from inspecting the transit network to answering a personal question: which stop, route sequence, and bus time matter for this trip? When the same-day options require walking beyond the configured one-mile ceiling, the app reports that no low-walk trip is available instead of filling the panel with future-day or high-walk alternatives.
+The WRTA tracker is route-first: routes and vehicles are the primary objects. The AO Labs interface is location-first: a selected place reframes the map around the rider's current location, the selected destination, the boarding stop chosen from that current location, any required transfer, the exit stop near the destination, route geometry, and live buses when browser GPS is available (Fig.~\ref{fig:bus_interface}). This changes the task from inspecting the transit network to answering a personal question: which stop, route sequence, and bus time matter for this trip? When direct options require a long walk, the transfer search can surface a two-bus route instead of filling the panel with high-walk single-route alternatives.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.96\textwidth]{bus-interface.png}
-    \caption{Stable live interface for selected WRTA destinations. The public app keeps saved destinations, route geometry, bus-stop symbols, live-bus state, and current-location state on one map while the side panel keeps selected-trip state in the same view. In this capture, simulated browser geolocation at Alden Hall and Blackstone Theaters selected produces a no-low-walk same-day state. The app suppresses future-day and over-one-mile walking options rather than presenting them as useful trip choices.}
+    \caption{Stable live interface for selected WRTA destinations. The public app keeps saved destinations, route geometry, bus-stop symbols, live-bus state, and current-location state on one map while the side panel keeps selected-trip state in the same view. In this capture, simulated browser geolocation near WPI with Blackstone Theaters selected surfaces a Route 23 to Route 4 transfer through Central Hub. The app suppresses high-walk Route 4-only alternatives and separates the bus-at-stop times from the derived destination-arrival estimate.}
     \label{fig:bus_interface}
 \end{figure}
 
@@ -201,7 +201,7 @@ This work shows that a transit interface can improve utility by reducing interpr
 
 The app also demonstrates a useful boundary for AI- or automation-adjacent personal tools: the system should not invent certainty. The correct design is not to promise exact destination arrival. It is to show the stop prediction, show the walking basis, compute a clear derived estimate, and keep the source boundary visible. This makes the app calmer and more trustworthy because the rider can see which parts are official data and which parts are personal context.
 
-Several limitations remain. The public app currently focuses on six saved destinations, a focused live-bus surface, and direct or one-transfer low-walk trip options rather than full-system itinerary optimization. The current default hides auto-selected options over one mile of total walking and searches same-day service only; this is appropriate for the intended rider but not a universal transit-planning objective. Browser geolocation may be blocked or unavailable depending on device, browser, operating system, and permission state. WRTA stop predictions can be absent, stale, or changed by operations. OSRM walking routes may not match the exact path a rider chooses. No controlled user study has yet measured missed buses, time saved, stress, or reduction in interpretation errors. Until those observations exist, the paper presents the app as a source-bounded product and design record, not a population-level accessibility result.
+Several limitations remain. The public app currently focuses on six saved destinations, a focused live-bus surface, and direct or one-transfer low-walk trip options rather than full-system itinerary optimization. The current default hides auto-selected options over 1.5 miles of total walking and searches same-day service only; this is appropriate for the intended rider but not a universal transit-planning objective. Browser geolocation may be blocked or unavailable depending on device, browser, operating system, and permission state. WRTA stop predictions can be absent, stale, or changed by operations. OSRM walking routes may not match the exact path a rider chooses. No controlled user study has yet measured missed buses, time saved, stress, or reduction in interpretation errors. Until those observations exist, the paper presents the app as a source-bounded product and design record, not a population-level accessibility result.
 
 \section{Materials and Methods}
 
@@ -215,7 +215,7 @@ Live vehicle state is read from the WRTA SWIV service. Stop arrivals are read fr
 
 \subsection{Boarding-stop selection}
 
-For a selected saved destination, the primary path uses browser GPS as the trip origin. The server evaluates direct trips and one-transfer trips from WRTA route candidates, searches feasible boarding, transfer, and exit stop combinations, and ranks options with walking distance as the primary burden. Auto-selected options are filtered to same-day service and a one-mile total-walking ceiling before they are shown. The UI displays the boarding stop from the current location, the transfer stop when needed, the exit stop near the selected place, route context, and upcoming stop arrivals. If GPS is unavailable, the app uses a labeled location-nearest fallback instead of implying that the fallback is the rider's boarding stop.
+For a selected saved destination, the primary path uses browser GPS as the trip origin. The server evaluates direct trips and one-transfer trips from WRTA route candidates, searches feasible boarding, transfer, and exit stop combinations, and ranks options with walking distance as the primary burden. Auto-selected options are filtered to same-day service and a 1.5-mile total-walking ceiling before they are shown. The UI displays the boarding stop from the current location, the transfer stop when needed, the exit stop near the selected place, route context, and upcoming stop arrivals. If GPS is unavailable, the app uses a labeled location-nearest fallback instead of implying that the fallback is the rider's boarding stop.
 
 \subsection{Destination-arrival estimate}
 
@@ -229,7 +229,7 @@ where \(T_{\mathrm{board1}}\) is the WRTA-derived first boarding-stop time, \(D_
 
 \subsection{Visual verification}
 
-The screenshot in Figure~\ref{fig:bus_interface} was generated from the local app at desktop width using simulated browser geolocation at Alden Hall with Blackstone Theaters selected. This verifies that the public interaction model has the expected ingredients for a same-day no-low-walk state: current-location marker, selected destination, live-bus layer, selected-trip panel, and an explicit suppression of long-walk options.
+The screenshot in Figure~\ref{fig:bus_interface} was generated from the local app at desktop width using simulated browser geolocation near WPI with Blackstone Theaters selected. This verifies that the public interaction model has the expected ingredients for a same-day transfer state: current-location marker, selected destination, live-bus layer, selected-trip panel, route sequence, transfer stop, and suppression of long-walk single-route options.
 
 \section{Acknowledgements}
 

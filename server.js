@@ -25,12 +25,12 @@ const MAX_AUTO_ROUTE_CANDIDATES = 4;
 const MAX_AUTO_BOARD_CANDIDATES = 4;
 const MAX_AUTO_EXIT_CANDIDATES = 4;
 const MAX_AUTO_DEPARTURES_PER_STOP = 5;
-const MAX_TRANSFER_FIRST_ROUTES = 4;
-const MAX_TRANSFER_SECOND_ROUTES = 3;
-const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 1;
-const MAX_TRANSFER_PLANS = 7;
+const MAX_TRANSFER_FIRST_ROUTES = 14;
+const MAX_TRANSFER_SECOND_ROUTES = 8;
+const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 2;
+const MAX_TRANSFER_PLANS = 24;
 const MAX_TRANSFER_WALK_METERS = 550;
-const MAX_AUTO_OPTION_WALK_METERS = 1609.344;
+const MAX_AUTO_OPTION_WALK_METERS = 2414.016;
 const AUTO_SEARCH_DAYS_AHEAD = 0;
 const FIXED_ROUTE_SEARCH_DAYS_AHEAD = 1;
 const MIN_TRANSFER_MS = 3 * 60 * 1000;
@@ -1006,9 +1006,18 @@ function journeyChoices(plans) {
 }
 
 function visibleAutoChoices(plans) {
-  return journeyChoices(plans)
-    .filter((plan) => totalWalkingMeters(plan) <= MAX_AUTO_OPTION_WALK_METERS)
-    .slice(0, 6);
+  const visible = [];
+  const seen = new Set();
+  for (const plan of journeyChoices(plans).filter((item) => totalWalkingMeters(item) <= MAX_AUTO_OPTION_WALK_METERS)) {
+    const routeKey = (plan.routeIds || (plan.route?.id ? [plan.route.id] : [])).join("+");
+    const arrivalKey = Math.round(Number(plan.timings?.destinationArrivalMs || plan.timings?.exitArrivalMs || 0) / 60000);
+    const key = `${routeKey}:${arrivalKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    visible.push(plan);
+    if (visible.length >= 6) break;
+  }
+  return visible;
 }
 
 function leastWalkingTripChoices(plans) {
@@ -1127,6 +1136,7 @@ function transferStopPairs(firstRoute, secondRoute) {
 
 async function transferRouteCandidates(origin, destination) {
   const previews = await routePreviews(origin, destination, null);
+  const previewByRouteId = new Map(previews.map((preview) => [preview.routeId, preview]));
   const firstIds = previews
     .slice()
     .sort((a, b) => a.nearestBoardMeters - b.nearestBoardMeters)
@@ -1144,6 +1154,7 @@ async function transferRouteCandidates(origin, destination) {
     .map((result) => [result.value.routeId, result.value]));
   return {
     previews,
+    previewByRouteId,
     firstRoutes: firstIds.map((routeId) => routeById.get(routeId)).filter(Boolean),
     secondRoutes: secondIds.map((routeId) => routeById.get(routeId)).filter(Boolean)
   };
@@ -1236,7 +1247,15 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
     for (const secondRoute of routeCandidates.secondRoutes) {
       if (!firstRoute || !secondRoute || firstRoute.routeId === secondRoute.routeId) continue;
       for (const pair of transferStopPairs(firstRoute, secondRoute)) {
-        candidates.push(pair);
+        const firstPreview = routeCandidates.previewByRouteId.get(firstRoute.routeId);
+        const secondPreview = routeCandidates.previewByRouteId.get(secondRoute.routeId);
+        candidates.push({
+          ...pair,
+          score: pair.distanceMeters
+            + Number(firstPreview?.nearestBoardMeters || 0)
+            + Number(secondPreview?.nearestExitMeters || 0)
+            + (/central hub|union station/i.test(`${pair.fromStop.name} ${pair.toStop.name}`) ? -250 : 0)
+        });
       }
     }
   }
