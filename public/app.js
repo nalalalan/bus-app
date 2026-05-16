@@ -1269,7 +1269,7 @@ async function loadAllRoutes() {
 }
 
 async function refreshLive() {
-  setStatus("Updating");
+  if (!selectedLocationId && !followVehicleKey) setStatus("Updating");
   await Promise.all(ROUTES.map(async (routeId) => {
     try {
       await loadLive(routeId);
@@ -1287,7 +1287,7 @@ async function refreshLive() {
   renderBusList();
   setUpdatedAt();
   const total = [...routeState.values()].reduce((sum, state) => sum + (state.vehicles?.length || 0), 0);
-  setStatus(`${total} live buses`);
+  if (!selectedLocationId && !followVehicleKey) setStatus(`${total} live buses`);
 }
 
 function bindEvents() {
