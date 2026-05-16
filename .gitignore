@@ -4,6 +4,7 @@ _server.log
 _server.err.log
 *.png
 !public/assets/*.png
+!manuscripts/**/figures/*.png
 manuscripts/**/main.aux
 manuscripts/**/main.bbl
 manuscripts/**/main.bcf
