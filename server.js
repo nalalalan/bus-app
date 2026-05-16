@@ -569,6 +569,7 @@ async function autoRoutePreviews(origin, destination) {
   }
 
   return [...previews.values()]
+    .filter((preview) => TRACKED_ROUTE_IDS.includes(String(preview.routeId)))
     .filter((preview) => Number.isFinite(preview.nearestBoardMeters) && Number.isFinite(preview.nearestExitMeters))
     .map((preview) => ({
       ...preview,

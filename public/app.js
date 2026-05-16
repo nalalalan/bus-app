@@ -108,6 +108,7 @@ let gpsStatus = "GPS needed";
 let gpsRequestPromise = null;
 let gpsPermissionStatus = null;
 let locationWatchId = null;
+let selectedLocationRequestId = 0;
 
 function api(path) {
   return fetch(path, { cache: "no-store" }).then(async (response) => {
@@ -284,6 +285,55 @@ function renderBusList() {
   els.busList.innerHTML = rows.join("");
 }
 
+function normalizePlanArrivals(planData, location) {
+  const plan = planData?.plan;
+  if (!plan?.boardingStop || !plan?.exitStop) return null;
+  const scheduledBusMs = Number(plan.timings?.scheduledBusArrivalMs);
+  const predictedBusMs = Number(plan.timings?.busArrivalMs || scheduledBusMs);
+  const scheduleDelayMs = Number.isFinite(predictedBusMs) && Number.isFinite(scheduledBusMs)
+    ? predictedBusMs - scheduledBusMs
+    : 0;
+  const scheduledDestinationArrivalMs = Number(plan.timings?.exitArrivalMs)
+    + Math.round(Number(plan.walking?.fromExit?.durationSeconds || 0) * 1000);
+  const destinationArrivalMs = scheduledDestinationArrivalMs + scheduleDelayMs;
+  const boardingStop = {
+    ...plan.boardingStop,
+    distanceMeters: plan.walking?.toBoard?.distanceMeters
+  };
+  const exitStop = {
+    ...plan.exitStop,
+    distanceMeters: plan.walking?.fromExit?.distanceMeters
+  };
+
+  return {
+    ok: true,
+    mode: "trip",
+    location,
+    route: plan.route,
+    stop: boardingStop,
+    boardingStop,
+    exitStop,
+    plan,
+    choiceCount: planData.choiceCount || 0,
+    selectedChoiceIndex: planData.selectedChoiceIndex || 0,
+    walking: plan.walking,
+    arrivals: [{
+      routeId: plan.route.id,
+      routeName: plan.route.name || `Route ${plan.route.id}`,
+      destination: plan.route.headsign || "destination",
+      scheduledMs: scheduledBusMs,
+      predictedMs: predictedBusMs,
+      scheduledDestinationArrivalMs,
+      destinationArrivalMs,
+      walkToStopSeconds: plan.walking?.toBoard?.durationSeconds,
+      walkToStopMeters: plan.walking?.toBoard?.distanceMeters,
+      walkFromStopSeconds: plan.walking?.fromExit?.durationSeconds,
+      walkFromStopMeters: plan.walking?.fromExit?.distanceMeters,
+      source: plan.prediction?.source || "WRTA schedule"
+    }]
+  };
+}
+
 function renderSelectedStop(data = null, context = {}) {
   if (!data?.stop) {
     els.selectedStopName.textContent = selectedLocationId ? "Loading stop" : "Select a location";
@@ -295,28 +345,34 @@ function renderSelectedStop(data = null, context = {}) {
   const stop = data.stop;
   const route = data.route;
   const location = data.location;
-  const distanceFeet = Math.round(Number(stop.distanceMeters || 0) * 3.28084);
+  const arrivalMode = data.mode || "location";
   els.selectedStopName.textContent = stop.name || "Closest stop";
-  if (context.atSelectedPlace) {
-    els.selectedStopDetail.textContent = `At ${location?.name || "selected place"}; nearest stop is ${distanceFeet} ft away`;
+  if (arrivalMode === "trip") {
+    const walkText = data.walking?.toBoard?.durationSeconds ? formatWalkSeconds(data.walking.toBoard.durationSeconds) : "";
+    const distanceText = formatDistance(data.walking?.toBoard?.distanceMeters ?? stop.distanceMeters);
+    const exitText = data.exitStop?.name ? `exit ${data.exitStop.name}` : `destination ${location?.name || ""}`.trim();
+    els.selectedStopDetail.textContent = `Board stop; ${distanceText}${walkText ? `, ${walkText}` : ""}; ${exitText}`;
+  } else if (context.atSelectedPlace) {
+    els.selectedStopDetail.textContent = `At ${location?.name || "selected place"}; nearest stop ${formatDistance(stop.distanceMeters)}`;
   } else if (!context.hasGps) {
-    els.selectedStopDetail.textContent = `GPS needed; nearest stop is ${distanceFeet} ft from ${location?.name || "location"}`;
+    els.selectedStopDetail.textContent = `GPS needed for trip stop; location stop ${formatDistance(stop.distanceMeters)} from ${location?.name || "location"}`;
   } else {
-    els.selectedStopDetail.textContent = `Exit stop for ${location?.name || "location"}; ${distanceFeet} ft from place`;
+    els.selectedStopDetail.textContent = `Location stop for ${location?.name || "location"}; ${formatDistance(stop.distanceMeters)} from place`;
   }
   els.arrivalList.innerHTML = (data.arrivals || []).length
     ? data.arrivals.map((arrival) => {
-      const busAtStop = formatMinuteTime(arrival.predictedMs);
-      const destinationAt = arrival.destinationArrivalMs
-        ? formatMinuteTime(arrival.destinationArrivalMs)
-        : "";
       const placeName = location?.name || "destination";
+      const busText = timePairText(arrival.predictedMs, arrival.scheduledMs, "Bus predicted");
+      const destinationText = arrival.destinationArrivalMs
+        ? timePairText(arrival.destinationArrivalMs, arrival.scheduledDestinationArrivalMs, `Arrive ${placeName}`)
+        : "";
       const routeText = `Route ${arrival.routeId} to ${arrival.destination || "destination"}`;
-      const walkText = arrival.walkFromStopSeconds ? formatWalkSeconds(arrival.walkFromStopSeconds) : "";
-      const destinationText = destinationAt ? `At ${placeName} about ${destinationAt}` : `At ${placeName}`;
-      const detailParts = [destinationText, walkText, routeText].filter(Boolean);
+      const walkToText = arrival.walkToStopSeconds ? `walk to stop ${formatWalkSeconds(arrival.walkToStopSeconds)}` : "";
+      const walkFromText = arrival.walkFromStopSeconds ? `from exit ${formatWalkSeconds(arrival.walkFromStopSeconds)}` : "";
+      const placeText = destinationText || `Arrive ${placeName}`;
+      const detailParts = [placeText, walkToText, walkFromText, routeText].filter(Boolean);
       return `<div class="arrival-row">
-        <strong>Bus at stop ${escapeHtml(busAtStop)}</strong>
+        <strong>${escapeHtml(busText)}</strong>
         <span>${escapeHtml(detailParts.join("; "))}</span>
       </div>`;
     }).join("")
@@ -328,12 +384,34 @@ function setStatus(text) {
 }
 
 function formatMinuteTime(ms) {
-  return minuteTimeFormatter.format(new Date(Math.round(Number(ms) / 60000) * 60000));
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return "--";
+  return minuteTimeFormatter.format(new Date(Math.round(value / 60000) * 60000));
 }
 
 function formatWalkSeconds(seconds) {
   const minutes = Math.max(1, Math.round(Number(seconds || 0) / 60));
   return `${minutes} min walk`;
+}
+
+function formatDistance(meters) {
+  const value = Number(meters || 0);
+  if (!Number.isFinite(value)) return "--";
+  const feet = Math.round(value * 3.28084);
+  if (feet < 1000) return `${feet} ft`;
+  return `${(feet / 5280).toFixed(2)} mi`;
+}
+
+function sameMinute(a, b) {
+  return Math.round(Number(a || 0) / 60000) === Math.round(Number(b || 0) / 60000);
+}
+
+function timePairText(predictedMs, scheduledMs, label) {
+  const predicted = formatMinuteTime(predictedMs);
+  const scheduled = formatMinuteTime(scheduledMs);
+  if (!Number.isFinite(Number(scheduledMs))) return `${label} ${predicted}`;
+  if (sameMinute(predictedMs, scheduledMs)) return `${label} ${predicted}; scheduled ${scheduled}`;
+  return `${label} ${predicted}; scheduled ${scheduled}`;
 }
 
 function renderGpsButton() {
@@ -639,7 +717,7 @@ function refreshSelectedLocationView() {
     atSelectedPlace: isAtSelectedPlace(selectedArrivalData.location)
   };
   renderSelectedStop(selectedArrivalData, context);
-  drawSelectedTrip(selectedArrivalData.location, selectedArrivalData.stop, selectedArrivalData.route?.id);
+  drawSelectedData(selectedArrivalData, { preserveView: Boolean(followVehicleKey) });
 }
 
 function startLocationWatch() {
@@ -831,7 +909,7 @@ function nearestStopOnRoute(routeId, point) {
   return best;
 }
 
-function drawSelectedTrip(location, stop, routeId = selectedRouteId) {
+function drawSelectedTrip(location, stop, routeId = selectedRouteId, options = {}) {
   if (selectedTripLayer) selectedTripLayer.remove();
   if (selectedConnectorLayer) selectedConnectorLayer.remove();
   if (selectedStopLayer) selectedStopLayer.remove();
@@ -842,7 +920,7 @@ function drawSelectedTrip(location, stop, routeId = selectedRouteId) {
 
   const gpsLocation = hasGpsLocation() ? currentLocation : null;
   const atSelectedPlace = isAtSelectedPlace(location);
-  const originStop = gpsLocation && !atSelectedPlace ? nearestStopOnRoute(routeId, gpsLocation) : null;
+  const originStop = options.originStop || (gpsLocation && !atSelectedPlace ? nearestStopOnRoute(routeId, gpsLocation) : null);
   const segment = originStop ? routeSegment(routeId, originStop, stop) : [];
   const color = routeColor(routeId);
   const tripLayers = [];
@@ -869,12 +947,25 @@ function drawSelectedTrip(location, stop, routeId = selectedRouteId) {
   drawStopMarkers(routeId, routeStops, originStop, stop);
 
   const points = [location, stop, gpsLocation, originStop, ...segment].filter(Boolean);
-  fitBounds(points, 15);
+  if (!options.preserveView) fitBounds(points, 15);
+}
+
+function drawSelectedData(data, options = {}) {
+  if (!data?.location || !data?.route?.id) return;
+  if (data.mode === "trip") {
+    drawSelectedTrip(data.location, data.exitStop, data.route.id, {
+      originStop: data.boardingStop,
+      preserveView: options.preserveView
+    });
+    return;
+  }
+  drawSelectedTrip(data.location, data.stop, data.route.id, options);
 }
 
 async function selectLocation(locationId) {
   const location = LOCATIONS.find((item) => item.id === locationId);
   if (!location) return;
+  const requestId = ++selectedLocationRequestId;
   followVehicleKey = "";
   selectedArrivalData = null;
   selectedLocationId = location.id;
@@ -883,11 +974,16 @@ async function selectLocation(locationId) {
   setStatus(`Loading ${location.name}`);
 
   try {
-    const gpsPromise = ensureCurrentLocation();
-    const [data] = await Promise.all([
-      api(`/api/location-arrivals?locationId=${encodeURIComponent(location.id)}&now=${Date.now()}`),
-      gpsPromise
-    ]);
+    await ensureCurrentLocation();
+    let data;
+    if (hasGpsLocation()) {
+      const planData = await api(`/api/plan?lat=${encodeURIComponent(currentLocation.lat)}&lng=${encodeURIComponent(currentLocation.lng)}&destination=${encodeURIComponent(location.id)}&now=${Date.now()}`);
+      data = normalizePlanArrivals(planData, location);
+    } else {
+      data = await api(`/api/location-arrivals?locationId=${encodeURIComponent(location.id)}&now=${Date.now()}`);
+      data.mode = "location";
+    }
+    if (requestId !== selectedLocationRequestId || !data) return;
     selectedArrivalData = data;
     selectedRouteId = data.route?.id || "";
     updateRouteStyles();
@@ -896,7 +992,7 @@ async function selectLocation(locationId) {
       atSelectedPlace: isAtSelectedPlace(location)
     };
     renderSelectedStop(data, context);
-    drawSelectedTrip(location, data.stop, data.route?.id);
+    drawSelectedData(data, { preserveView: Boolean(followVehicleKey) });
     if (!context.hasGps) {
       setStatus(`${gpsStatus}; ${location.name} stop shown`);
     } else if (context.atSelectedPlace) {
@@ -905,6 +1001,7 @@ async function selectLocation(locationId) {
       setStatus(`${location.name} - Route ${selectedRouteId || "--"}`);
     }
   } catch (error) {
+    if (requestId !== selectedLocationRequestId) return;
     if (selectedStopLayer) selectedStopLayer.remove();
     els.selectedStopName.textContent = "Stop unavailable";
     els.selectedStopDetail.textContent = error.message;

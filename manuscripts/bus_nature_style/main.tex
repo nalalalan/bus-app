@@ -152,12 +152,12 @@ The design motivation is neurodivergent fit. The intended rider has self-reporte
 
 \subsection{A stable, location-first map changes the task}
 
-The WRTA tracker is route-first: routes and vehicles are the primary objects. The AO Labs interface is location-first: a selected place reframes the map around that destination, the closest tracked stop, route geometry, live buses, and current location when browser GPS is available (Fig.~\ref{fig:bus_interface}). This changes the task from inspecting the transit network to answering a personal question: which stop and which bus time matter for this place?
+The WRTA tracker is route-first: routes and vehicles are the primary objects. The AO Labs interface is location-first: a selected place reframes the map around the rider's current location, the selected destination, the boarding stop chosen from that current location, the exit stop near the destination, route geometry, and live buses when browser GPS is available (Fig.~\ref{fig:bus_interface}). This changes the task from inspecting the transit network to answering a personal question: which stop, route, and bus time matter for this trip?
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.96\textwidth]{bus-interface.png}
-    \caption{Stable live interface for selected WRTA destinations. The public app keeps saved destinations, route geometry, bus-stop symbols, live-bus state, and current-location state on one map while the side panel keeps closest-stop and arrival rows in the same view. At capture time WRTA returned no stop times for the selected stop; the empty timing row is therefore preserved rather than replaced with a fabricated arrival. This screenshot was generated from the local app using simulated browser geolocation at 96 William Street so that the current-location framing is visible without depending on desktop permission state.}
+    \caption{Stable live interface for selected WRTA destinations. The public app keeps saved destinations, route geometry, bus-stop symbols, live-bus state, and current-location state on one map while the side panel keeps boarding-stop and arrival rows in the same view. In this capture, simulated browser geolocation near Park Avenue and Sagamore Road selects Park Ave + Sagamore St as the boarding stop for a trip to 96 William Street, while Elm St + Russell St remains the exit-side stop. The timing row separates WRTA-derived bus arrival at the boarding stop from the derived destination-arrival estimate.}
     \label{fig:bus_interface}
 \end{figure}
 
@@ -170,7 +170,7 @@ The WRTA tracker is route-first: routes and vehicles are the primary objects. Th
 Task & WRTA tracker & AO Labs bus tracker \\
 \midrule
 Primary object & Route and system map & Saved place or selected destination \\
-Stop selection & Interpreted by rider & Closest tracked stop shown and labeled \\
+Stop selection & Interpreted by rider & GPS-based boarding stop, exit stop, or labeled fallback \\
 Location context & Not personalized by default & Current location shown when browser GPS is available \\
 Timing row & Stop prediction surface & Bus-at-stop time plus derived destination estimate \\
 Map behavior & General live operations view & Selected-place framing with route and stop context \\
@@ -181,7 +181,7 @@ Authority & Official WRTA surface & WRTA-derived, route-bounded, not authoritati
 
 \subsection{The app separates bus-at-stop time from destination-arrival time}
 
-The most important timing correction is semantic. A bus can arrive at a stop, and the rider can arrive at the selected destination later. If the interface collapses those events into one timestamp, the rider has to guess what the time refers to. The current app displays both values as separate claims. `Bus at stop' is derived from WRTA stop-time output for the nearest tracked stop. `At destination about' is computed by adding the OSRM stop-to-place walking duration to the stop time.
+The most important timing correction is semantic. A bus can arrive at a stop, and the rider can arrive at the selected destination later. If the interface collapses those events into one timestamp, the rider has to guess what the time refers to. The current app displays both values as separate claims. `Bus predicted' and `scheduled' are derived from WRTA stop-time output for the selected boarding stop when GPS is available. The destination-arrival value is computed by adding scheduled in-vehicle travel and OSRM exit-stop-to-place walking duration, with live delay propagated when a WRTA prediction is available.
 
 This separation prevents the app from overstating certainty. The first value is a transit-source value for a stop. The second is a derived estimate for a place. The second depends on walking route availability, walking speed, business entrance geometry, traffic signals, and whether the rider starts walking immediately after leaving the bus. The UI labels it as approximate, and the paper treats it as a derived interface estimate rather than an official WRTA prediction.
 
@@ -207,29 +207,29 @@ Several limitations remain. The public app currently focuses on four routes, six
 
 \subsection{System}
 
-The app is a Node.js web service deployed at `https://bus.aolabs.io/'. The browser client renders a Leaflet map with OpenStreetMap tiles. The public tracked route set is 2, 3, 4, and 31. Saved destinations are fixed latitude-longitude records in the application source. The server exposes JSON endpoints for route geometry, live vehicles, selected-location arrivals, walking routes, destination geocoding, and health state.
+The app is a Node.js web service deployed at `https://bus.aolabs.io/'. The browser client renders a Leaflet map with OpenStreetMap tiles. The public tracked route set is 2, 3, 4, and 31. Saved destinations are fixed latitude-longitude records in the application source. The server exposes JSON endpoints for route geometry, live vehicles, trip planning, selected-location arrivals, walking routes, destination geocoding, and health state.
 
 \subsection{Transit sources}
 
 Live vehicle state is read from the WRTA SWIV service. Stop arrivals are read from WRTA stop-time output for the selected stop. Route stops, route shapes, and schedule details are read through Ride Guide endpoints for the WRTA dataset. The app does not create official transit predictions; it displays or derives values from those upstream sources.
 
-\subsection{Closest-stop selection}
+\subsection{Boarding-stop selection}
 
-For a selected saved destination, the server searches stops from the tracked route set and selects the stop with the smallest straight-line distance to the destination. The UI then displays the closest tracked stop, route context, and upcoming stop arrivals. This is intentionally simple and inspectable; it minimizes walking among the currently tracked routes rather than performing full-system transit planning.
+For a selected saved destination, the primary path uses browser GPS as the trip origin. The server searches only the tracked route set, evaluates feasible boarding and exit stop pairs, and selects among the least-walking candidates. The UI displays the boarding stop from the current location, the exit stop near the selected place, route context, and upcoming stop arrivals. If GPS is unavailable, the app uses a labeled location-nearest fallback instead of implying that the fallback is the rider's boarding stop.
 
 \subsection{Destination-arrival estimate}
 
-For each selected-location arrival row, the server obtains upcoming stop times for the closest tracked stop and requests an OSRM walking route from that stop to the selected destination. Destination arrival is calculated as
+For each selected trip, the server obtains upcoming stop times for the selected boarding stop and requests OSRM walking routes from the current location to the boarding stop and from the exit stop to the selected destination. Destination arrival is calculated as
 
 \[
-T_{\mathrm{destination}} = T_{\mathrm{stop}} + D_{\mathrm{walk}},
+T_{\mathrm{destination}} = T_{\mathrm{board}} + D_{\mathrm{ride}} + D_{\mathrm{exit\ walk}},
 \]
 
-where \(T_{\mathrm{stop}}\) is the WRTA-derived stop time and \(D_{\mathrm{walk}}\) is the OSRM walking duration. If OSRM fails, the server falls back to a straight-line walking estimate at the configured walking speed of 1.34 m s\(^{-1}\). The UI labels destination arrival as approximate.
+where \(T_{\mathrm{board}}\) is the WRTA-derived boarding-stop time, \(D_{\mathrm{ride}}\) is the scheduled in-vehicle travel time between the boarding and exit stops, and \(D_{\mathrm{exit\ walk}}\) is the OSRM walking duration from the exit stop to the selected place. If OSRM fails, the server falls back to a straight-line walking estimate at the configured walking speed of 1.34 m s\(^{-1}\). The UI labels destination arrival as a source-bounded derived estimate rather than an official WRTA prediction.
 
 \subsection{Visual verification}
 
-The screenshot in Figure~\ref{fig:bus_interface} was generated from the local app at desktop width using simulated browser geolocation at 96 William Street and a selected Cold Stone destination. This verifies that the public interaction model has the expected ingredients: current-location marker, selected destination, route path, bus-stop symbols, live-bus layer, closest-stop panel, and separate bus-at-stop and destination-arrival fields.
+The screenshot in Figure~\ref{fig:bus_interface} was generated from the local app at desktop width using simulated browser geolocation near Park Avenue and Sagamore Road with 96 William Street selected. This verifies that the public interaction model has the expected ingredients: current-location marker, selected destination, highlighted route path, bus-stop symbols, live-bus layer, boarding-stop panel, and separate bus-at-stop and destination-arrival fields.
 
 \section{Acknowledgements}
 
