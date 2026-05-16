@@ -4,3 +4,11 @@ _server.log
 _server.err.log
 *.png
 !public/assets/*.png
+manuscripts/**/main.aux
+manuscripts/**/main.bbl
+manuscripts/**/main.bcf
+manuscripts/**/main.blg
+manuscripts/**/main.log
+manuscripts/**/main.out
+manuscripts/**/main.pdf
+manuscripts/**/main.run.xml

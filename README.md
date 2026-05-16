@@ -15,3 +15,7 @@ Sources:
 - WRTA SWIV stop-arrival data for the closest tracked stop after a location is selected.
 - WRTA route geometry through the existing Ride Guide route endpoints.
 - OpenStreetMap tiles.
+
+Paper:
+- `/paper.pdf`
+- Source: `manuscripts/bus_nature_style/main.tex`

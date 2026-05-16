@@ -106,6 +106,13 @@ h1 {
   min-width: 0;
 }
 
+.suite-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .suite-ao-home,
 .suite-app-brand,
 .suite-topbar-actions a {
@@ -507,6 +514,11 @@ h1 {
   .suite-topbar {
     grid-template-columns: 1fr;
     padding: 12px 10px;
+  }
+
+  .suite-topbar-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .suite-topbar-actions a {

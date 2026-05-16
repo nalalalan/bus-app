@@ -1,0 +1,220 @@
+\pdfminorversion=7
+\documentclass[12pt,letterpaper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[style=science,backend=biber,sorting=none,articletitle=true]{biblatex}
+\addbibresource{references.bib}
+\usepackage{newtxtext,newtxmath}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{afterpage}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{needspace}
+\usepackage{etoolbox}
+\usepackage{placeins}
+\usepackage{flafter}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{lineno}
+
+\hypersetup{
+  pdftitle={A Source-Bounded Transit Interface for Reducing Cognitive Load in Local Bus Use},
+  pdfauthor={Alan Pham},
+  pdfsubject={AO Labs bus app},
+  pdfkeywords={WRTA, transit interface, cognitive load, autism, ADHD, bus tracking}
+}
+
+\definecolor{BusInk}{HTML}{171717}
+\definecolor{BusMuted}{HTML}{5B625F}
+\definecolor{BusLine}{HTML}{D4D6D1}
+
+\setstretch{1.15}
+\setlength{\parindent}{0.24in}
+\setlength{\parskip}{0pt}
+\setlist{nosep,leftmargin=*}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\titleformat{\section}{\normalfont\large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\captionsetup{belowskip=6pt,aboveskip=6pt}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small AO Labs bus}
+\rhead{\small \thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\setlength{\headheight}{14.5pt}
+
+\newcommand{\sourcebox}[2]{%
+  \par\smallskip
+  \noindent\colorbox{BusLine}{%
+    \parbox{\dimexpr\linewidth-2\fboxsep}{\textbf{#1.} #2}%
+  }%
+  \par\smallskip
+}
+
+\title{\textbf{A Source-Bounded Transit Interface for Reducing Cognitive Load in Local Bus Use}}
+\author{Alan Pham\\AO Labs\\Worcester, Massachusetts, USA}
+\date{May 15, 2026}
+
+\begin{document}
+\pagenumbering{roman}
+\begin{titlepage}
+\centering
+\vspace*{0.8in}
+{\LARGE \textbf{A Source-Bounded Transit Interface for Reducing Cognitive Load in Local Bus Use}\par}
+\vspace{0.28in}
+{\large Alan Pham\par}
+{\normalsize AO Labs, Worcester, Massachusetts, USA\par}
+\vspace{0.38in}
+\begin{minipage}{0.86\linewidth}
+\bfseries
+Bus trackers usually expose vehicles, routes, stops, and predictions as separate facts. The AO Labs bus app is a deliberately smaller interface that starts from a rider's actual destination, binds that destination to the nearest relevant WRTA stop and live route state, and displays the two times the rider needs to distinguish: when the bus reaches the stop and when the rider is expected to reach the selected place after walking from that stop.
+\end{minipage}
+\vfill
+{\small Public surface: \url{https://bus.aolabs.io/}\par}
+{\small Manuscript build: \today\par}
+\end{titlepage}
+\clearpage
+\pagenumbering{arabic}
+
+\linenumbers
+
+\section*{Introduction}
+
+Live transit maps are often accurate without being easy to use. The WRTA tracker provides the authoritative live bus map and route view for Worcester Regional Transit Authority service \cite{wrtaTracker}. For a rider trying to decide whether to leave, wait, board, or keep watching the bus, however, a live map still leaves several translations unfinished. The rider must connect the current location to a destination, infer which stop matters, inspect routes, decide whether an arriving vehicle is relevant, and mentally convert stop arrivals into destination arrivals.
+
+This paper describes the AO Labs bus app, a personal web interface for WRTA travel in Worcester. The current public version tracks routes 2, 3, 4, and 31 and six fixed locations: 96 William Street, Alden Hall, Union Station, Chipotle on Park Avenue, Cold Stone on Main Street, and Blackstone Theaters. It is not a replacement data source for WRTA. It is a source-bounded interface placed above WRTA live data, WRTA stop predictions, WRTA route geometry, OpenStreetMap tiles, and OSRM walking estimates \cite{rideGuide,osm,osrm}.
+
+The design motivation is personal and functional. The intended rider has self-reported autism and ADHD and wants a stable screen that removes repeated interpretation work: no manual refreshing, no guessing which stop matters, no vague distance counting, no switching between a route list and a map, and no second screen that hides the original context. The question is not whether the app contains more raw information than the WRTA tracker. The question is whether it presents the fewer facts that make the next transit decision obvious.
+
+\section*{Results}
+
+\subsection*{A location-first bus tracker changes the task}
+
+The WRTA tracker is route-first: routes and live buses are the primary objects. The AO Labs bus app is location-first: the rider selects a place and the app immediately frames the selected place, current location when GPS is available, nearby WRTA stop, relevant route geometry, and live bus state on one map. This changes the interaction from ``inspect the system'' to ``understand this trip target.''
+
+\begin{table}[H]
+\centering
+\small
+\caption{\textbf{Interface comparison for the target rider and use case.} The comparison is bounded to the public AO Labs bus app as of May 15, 2026 and the WRTA tracker link used as the official source surface.}
+\begin{tabular}{L{0.27\linewidth}L{0.30\linewidth}L{0.33\linewidth}}
+\toprule
+Task & WRTA tracker & AO Labs bus app \\
+\midrule
+Starting point & Route and system map & Saved place or current location \\
+Primary question answered & Where are buses and routes? & Which nearby stop and bus time matter for this place? \\
+Destination context & Interpreted by rider & Fixed destination pin on the map \\
+Stop selection & Interpreted by rider & Closest tracked stop shown with distance \\
+Timing display & Stop prediction view & Bus-at-stop time plus destination-arrival estimate \\
+Neurodivergent fit & High interpretation load & Stable, low-choice, visual state \\
+Data authority & Official WRTA surface & WRTA-derived; not authoritative beyond source data \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{The app separates bus arrival from destination arrival}
+
+A central failure mode in the prior interface was timing ambiguity. If a row only says an arrival time, the rider must ask: arrival where? At the bus stop, at the destination, or at an inferred endpoint? The current implementation separates the two claims. The first line is the WRTA-derived stop time: \textit{Bus at stop}. The second line is the derived destination estimate: \textit{At destination about}. This distinction is essential because the two values have different sources and different uncertainty.
+
+\sourcebox{Timing claim}{The bus-at-stop time comes from WRTA stop time output for the closest tracked stop. The destination-arrival time is computed as bus-at-stop time plus the OSRM walking estimate from that stop to the selected place. It is not an official WRTA prediction for the selected destination.}
+
+A live verification on May 15, 2026 at 8:23 PM Eastern time returned five upcoming arrivals for the selected Cold Stone location. The first row reported a Route 2 bus at the stop at 8:36 PM and an estimated arrival at Cold Stone at about 8:39 PM after a 175-second walk from the stop. This result is sufficient to verify that the page is displaying both times, but it is not evidence that future predictions will always be exact.
+
+\subsection*{The design reduces avoidable cognitive work}
+
+For the intended rider, the app is better than a general bus tracker when the costly task is not route discovery but moment-to-moment interpretation. The app removes several repeated burdens:
+
+\begin{enumerate}
+\item It keeps the map visible while the list changes, so the rider does not lose spatial context.
+\item It gives fixed locations recognizable icons, so the rider can select a known place without retyping or geocoding.
+\item It shows the closest stop and route geometry directly on the map instead of requiring the rider to infer them from a separate route surface.
+\item It follows live buses and interpolates movement between feed updates, reducing the static-then-jump behavior that makes a bus feel ambiguous.
+\item It avoids vibration, audio alerts, popups, and alarm-like interaction patterns. The interface is meant to be calm enough to leave open.
+\end{enumerate}
+
+These choices are not decorative accessibility features. They are the core product. Autism and ADHD can make context switching, uncertain timing, hidden state, and repeated manual interpretation disproportionately expensive. A useful tracker therefore has to reduce interpretation, not merely provide more data.
+
+\subsection*{Bounded superiority}
+
+The AO Labs app is superior to the WRTA tracker for this personal use case because it is narrower. It does not ask the rider to inspect all available routes, all stops, or the full transit network. It gives one map, a small set of locations, live bus markers, route paths, closest-stop state, and two clearly separated arrival concepts. This is the right tradeoff for a rider who wants to know what to do next without translating a transit operations display into a personal trip instruction.
+
+The claim is intentionally bounded. The WRTA tracker remains the official source and is broader than this app. The AO Labs app is better only where a personal layer can safely add context: saved places, current location, route framing, visual stability, stop-to-place walking estimates, and lower cognitive load.
+
+\section*{Discussion}
+
+The project shows that the value of a transit interface can come from reducing the number of interpretations a rider performs, not from increasing the amount of raw transit information on screen. For a neurodivergent rider, the difference between ``Route 31 is visible on a map'' and ``this stop, this bus time, this destination arrival estimate'' is large. The former exposes data. The latter turns data into an immediate personal state.
+
+The most important correction made during this work was the separation of arrival concepts. A bus can arrive at a stop, and a rider can arrive at a destination later. If those are collapsed into one timestamp, the interface creates a false sense of certainty. The updated UI makes the uncertainty visible by labeling the destination time as approximate and by keeping the walking basis attached to the row.
+
+The current implementation has several limits. It covers four routes, not the whole WRTA network. It includes six saved destinations, not arbitrary trip planning as the main public surface. Browser GPS can be blocked by device, browser, operating-system, or permission settings. WRTA predictions can be stale, absent, or changed by operations. The destination estimate assumes the rider leaves the stop and walks the OSRM route at the configured walking pace; it does not mean WRTA predicts arrival at the business doorway.
+
+Future work should use ride history to compare predicted bus-at-stop times, actual vehicle position, observed boarding time, and observed destination arrival. That evidence would allow the app to learn personal walking pace, identify stops that are technically close but practically worse, and quantify whether the interface reduces missed buses or late departures. Until that evidence exists, the paper treats the product as a source-bounded design and engineering record rather than a clinical or population-level accessibility claim.
+
+\section*{Materials and Methods}
+
+\subsection*{System}
+
+The public app is a Node.js web service deployed at \url{https://bus.aolabs.io/}. The browser client renders a Leaflet map with OpenStreetMap tiles. The server exposes JSON endpoints for health, route geometry, live vehicles, location arrivals, and walking routes. The current tracked routes are 2, 3, 4, and 31.
+
+\subsection*{Transit data}
+
+Live vehicle state is read from the WRTA SWIV service. Stop arrival rows are read from WRTA stop time output for the selected stop. Route stops, route shapes, and schedule details are read through Ride Guide endpoints for the WRTA dataset. The app does not create official transit predictions; it displays or derives values from these sources.
+
+\subsection*{Location selection}
+
+Saved destinations are stored as fixed latitude and longitude pairs in the application source. When a location is selected, the app searches the tracked route stops and finds the stop with the shortest straight-line distance to the selected point. The result is shown as the closest tracked stop for that selected place.
+
+\subsection*{Destination-arrival estimate}
+
+For selected-location arrivals, the server first obtains upcoming stop times for the closest tracked stop. It then requests an OSRM walking route from that stop to the selected destination. For each stop arrival, destination arrival is calculated as
+
+\[
+T_{\mathrm{destination}} = T_{\mathrm{stop}} + D_{\mathrm{walk}},
+\]
+
+where \(T_{\mathrm{stop}}\) is the WRTA-derived stop arrival time and \(D_{\mathrm{walk}}\) is the OSRM walking duration, constrained by a configured walking pace when needed. The UI labels this value as approximate.
+
+\subsection*{Verification}
+
+For the May 15, 2026 deployment, the app was checked with local syntax validation, local API calls, live API calls, desktop rendering, and mobile-width rendering. The live Cold Stone arrival check at 8:23 PM Eastern returned WRTA stop times, an OSRM stop-to-place walking estimate, and visible desktop and mobile rows containing both bus-at-stop and destination-arrival times.
+
+\section*{Acknowledgements}
+
+The design was shaped by repeated personal use-case corrections from Alan Pham, especially around timing ambiguity, map framing, GPS visibility, stable layout, and neurodivergent cognitive load.
+
+\section*{Funding}
+
+No external funding supported this work.
+
+\section*{Author contributions}
+
+Alan Pham specified the product requirements, evaluated the interface, and authored the design rationale. AO Labs implemented and deployed the public app and manuscript artifact.
+
+\section*{Competing interests}
+
+The author declares no competing interests.
+
+\section*{Data availability}
+
+The public app depends on WRTA live vehicle and stop time outputs, Ride Guide route geometry, OpenStreetMap tiles, and OSRM walking estimates. The deployed interface is available at \url{https://bus.aolabs.io/}.
+
+\section*{Code availability}
+
+The code is maintained in the AO Labs bus app repository. The public deployment is available at \url{https://bus.aolabs.io/}. Repository access is not currently advertised on the public page.
+
+\section*{Additional information}
+
+This manuscript is a product and design record for a personal transit interface. It does not present a controlled user study, population-level accessibility result, or official WRTA prediction system.
+
+\printbibliography
+
+\end{document}

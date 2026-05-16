@@ -86,6 +86,11 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   second: "2-digit"
 });
+const minuteTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  hour: "numeric",
+  minute: "2-digit"
+});
 
 let map;
 let refreshTimer;
@@ -301,14 +306,14 @@ function renderSelectedStop(data = null, context = {}) {
   }
   els.arrivalList.innerHTML = (data.arrivals || []).length
     ? data.arrivals.map((arrival) => {
-      const busAtStop = timeFormatter.format(new Date(arrival.predictedMs));
+      const busAtStop = formatMinuteTime(arrival.predictedMs);
       const destinationAt = arrival.destinationArrivalMs
-        ? timeFormatter.format(new Date(arrival.destinationArrivalMs))
+        ? formatMinuteTime(arrival.destinationArrivalMs)
         : "";
       const placeName = location?.name || "destination";
       const routeText = `Route ${arrival.routeId} to ${arrival.destination || "destination"}`;
       const walkText = arrival.walkFromStopSeconds ? formatWalkSeconds(arrival.walkFromStopSeconds) : "";
-      const destinationText = destinationAt ? `Arrive at ${placeName} ${destinationAt}` : `Arrive at ${placeName}`;
+      const destinationText = destinationAt ? `At ${placeName} about ${destinationAt}` : `At ${placeName}`;
       const detailParts = [destinationText, walkText, routeText].filter(Boolean);
       return `<div class="arrival-row">
         <strong>Bus at stop ${escapeHtml(busAtStop)}</strong>
@@ -320,6 +325,10 @@ function renderSelectedStop(data = null, context = {}) {
 
 function setStatus(text) {
   els.statusText.textContent = text;
+}
+
+function formatMinuteTime(ms) {
+  return minuteTimeFormatter.format(new Date(Math.round(Number(ms) / 60000) * 60000));
 }
 
 function formatWalkSeconds(seconds) {
