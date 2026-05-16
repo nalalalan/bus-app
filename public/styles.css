@@ -173,6 +173,7 @@ h1 {
   position: relative;
   z-index: 5;
   display: grid;
+  box-sizing: border-box;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 22px;
@@ -202,7 +203,7 @@ h1 {
   color: #25150d;
   font-size: 28px;
   line-height: 1.02;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
 }
 
 .paper-copy p {
@@ -586,6 +587,12 @@ h1 {
     overflow: hidden;
   }
 
+  .paper-copy strong {
+    max-width: min(100%, 27ch);
+    font-size: clamp(16px, 4.1vw, 20px);
+    line-height: 1.08;
+  }
+
   .paper-actions {
     margin-top: 14px;
     justify-content: flex-start;
@@ -627,10 +634,10 @@ h1 {
   }
 
   .paper-copy strong {
-    max-width: calc(100vw - 32px);
-    font-size: 20px;
-    line-height: 1.06;
-    word-break: break-word;
+    max-width: min(100%, 27ch);
+    font-size: clamp(16px, 4.1vw, 20px);
+    line-height: 1.08;
+    word-break: normal;
   }
 
   .paper-copy p {
