@@ -136,7 +136,12 @@ h1 {
 .suite-app-name {
   font-size: clamp(1.45rem, 2.8vw, 2.2rem);
   font-weight: 900;
-  line-height: 1;
+  line-height: 1.18;
+  padding-bottom: 2px;
+  margin-bottom: -2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .suite-topbar-actions a {
