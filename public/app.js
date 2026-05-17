@@ -1241,11 +1241,11 @@ async function selectLocation(locationId, choiceIndex = 0) {
     if (requestId !== selectedLocationRequestId) return;
     if (selectedStopLayer) selectedStopLayer.remove();
     const lowWalkMiss = String(error.message || "").toLowerCase().includes("no low-walk");
-    const sameDayMiss = String(error.message || "").toLowerCase().includes("no same-day");
+    const nextTripMiss = String(error.message || "").toLowerCase().includes("no next trip");
     els.selectedStopName.textContent = lowWalkMiss
       ? "No low-walk trip today"
-      : sameDayMiss
-        ? "No same-day trip"
+      : nextTripMiss
+        ? "No next trip"
         : "Stop unavailable";
     els.selectedStopDetail.textContent = error.message;
     els.arrivalList.innerHTML = "";
@@ -1253,8 +1253,8 @@ async function selectLocation(locationId, choiceIndex = 0) {
     renderTripOptions();
     setStatus(lowWalkMiss
       ? `${location.name} - no low-walk trip today`
-      : sameDayMiss
-        ? `${location.name} - no same-day trip`
+      : nextTripMiss
+        ? `${location.name} - no next trip`
         : "Stop unavailable");
   }
 }

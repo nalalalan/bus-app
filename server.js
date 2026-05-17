@@ -28,12 +28,13 @@ const MAX_AUTO_DEPARTURES_PER_STOP = 5;
 const MAX_TRANSFER_FIRST_ROUTES = 14;
 const MAX_TRANSFER_SECOND_ROUTES = 8;
 const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 2;
-const MAX_TRANSFER_PLANS = 40;
+const MAX_TRANSFER_PLANS = 14;
 const MAX_TRANSFER_WALK_METERS = 550;
 const PREFERRED_AUTO_OPTION_WALK_METERS = 1609.344;
 const MAX_AUTO_OPTION_WALK_METERS = 2414.016;
 const MAX_FALLBACK_OPTION_WALK_METERS = 5632.704;
-const AUTO_SEARCH_DAYS_AHEAD = 0;
+const WALK_EQUIVALENT_TOLERANCE_METERS = 220;
+const AUTO_SEARCH_DAYS_AHEAD = 1;
 const FIXED_ROUTE_SEARCH_DAYS_AHEAD = 1;
 const MIN_TRANSFER_MS = 3 * 60 * 1000;
 const MAX_DIRECT_WALK_CORRECTION_METERS = 1300;
@@ -996,6 +997,19 @@ function totalWalkingMeters(plan) {
     + Number(plan?.walking?.fromExit?.distanceMeters || 0);
 }
 
+function destinationArrivalMs(plan) {
+  return Number(plan?.timings?.destinationArrivalMs || plan?.timings?.exitArrivalMs || Infinity);
+}
+
+function compareJourneyPlans(a, b) {
+  const walkDelta = totalWalkingMeters(a) - totalWalkingMeters(b);
+  if (Math.abs(walkDelta) > WALK_EQUIVALENT_TOLERANCE_METERS) return walkDelta;
+  return destinationArrivalMs(a) - destinationArrivalMs(b)
+    || (a.legs?.length || 1) - (b.legs?.length || 1)
+    || walkDelta
+    || a.score - b.score;
+}
+
 function journeyOptionKey(plan) {
   if (Array.isArray(plan.legs) && plan.legs.length) {
     return plan.legs
@@ -1021,12 +1035,7 @@ function journeyChoices(plans) {
     if (!existing || plan.score < existing.score) groups.set(key, plan);
   }
   return [...groups.values()]
-    .sort((a, b) => {
-      return totalWalkingMeters(a) - totalWalkingMeters(b)
-        || (a.legs?.length || 1) - (b.legs?.length || 1)
-        || a.timings.exitArrivalMs - b.timings.exitArrivalMs
-        || a.score - b.score;
-    })
+    .sort(compareJourneyPlans)
     .slice(0, 6);
 }
 
@@ -1325,8 +1334,7 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
   }
   candidates.sort((a, b) => a.score - b.score);
 
-  const plans = [];
-  for (const candidate of candidates.slice(0, MAX_TRANSFER_PLANS)) {
+  const transferResults = await mapLimit(candidates.slice(0, MAX_TRANSFER_PLANS), 8, async (candidate) => {
     try {
       const firstResult = await createPlan(
         origin,
@@ -1334,13 +1342,13 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
         nowMs,
         candidate.firstRoute.routeId,
         transferPoint(candidate.fromStop),
-        { allowTransfers: false, skipLive: true, skipPredictions: true, boardLimit: 8, exitLimit: 2, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
+        { allowTransfers: false, skipLive: true, skipPredictions: true, boardLimit: 6, exitLimit: 2, departureLimit: 2, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
       );
       const firstPlan = firstResult.plan;
-      if (!firstPlan || firstPlan.status === "miss") continue;
+      if (!firstPlan || firstPlan.status === "miss") return null;
       const transferWalk = await walkingRoute(firstPlan.exitStop, candidate.toStop);
-      if (!isUsableWalkingRoute(transferWalk)) continue;
-      if (transferWalk.distanceMeters > MAX_TRANSFER_WALK_METERS) continue;
+      if (!isUsableWalkingRoute(transferWalk)) return null;
+      if (transferWalk.distanceMeters > MAX_TRANSFER_WALK_METERS) return null;
       const minimumTransferMs = Number(transferWalk.distanceMeters || 0) > 25 ? MIN_TRANSFER_MS : 0;
       const transferReadyMs = predictedExitMs(firstPlan)
         + Math.round(Number(transferWalk.durationSeconds || 0) * 1000)
@@ -1351,15 +1359,19 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
         transferReadyMs,
         candidate.secondRoute.routeId,
         destination,
-        { allowTransfers: false, skipLive: true, skipPredictions: true, boardLimit: 2, exitLimit: 3, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
+        { allowTransfers: false, skipLive: true, skipPredictions: true, boardLimit: 2, exitLimit: 3, departureLimit: 2, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
       );
       const secondPlan = secondResult.plan;
-      if (!secondPlan || secondPlan.status === "miss") continue;
-      plans.push(combineTransferPlan(firstPlan, secondPlan, transferWalk, nowMs));
+      if (!secondPlan || secondPlan.status === "miss") return null;
+      return combineTransferPlan(firstPlan, secondPlan, transferWalk, nowMs);
     } catch {
       // Transfer options are opportunistic; direct plans remain available.
+      return null;
     }
-  }
+  });
+  const plans = transferResults
+    .filter((result) => result.ok && result.value)
+    .map((result) => result.value);
 
   if (plans.length) {
     sources.push(sourceStatus("WRTA transfer search", true, {
@@ -1599,7 +1611,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
     }
   } else {
     sources.push(sourceStatus("Ride Guide candidate schedules", false, {
-      detail: routeSelection.auto ? "no same-day trip found" : "no feasible plan"
+      detail: routeSelection.auto ? "no next trip found" : "no feasible plan"
     }));
   }
 
@@ -1614,7 +1626,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   return {
     ok: Boolean(plan),
     error: plan ? "" : routeSelection.auto
-      ? `No same-day trip found within ${formatMiles(MAX_FALLBACK_OPTION_WALK_METERS)} walking`
+      ? `No next trip found within ${formatMiles(MAX_FALLBACK_OPTION_WALK_METERS)} walking`
       : "No feasible plan",
     plan,
     selectedChoiceIndex: planIndex,
