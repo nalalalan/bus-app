@@ -30,10 +30,13 @@ const MAX_TRANSFER_SECOND_ROUTES = 8;
 const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 2;
 const MAX_TRANSFER_PLANS = 24;
 const MAX_TRANSFER_WALK_METERS = 550;
+const PREFERRED_AUTO_OPTION_WALK_METERS = 1609.344;
 const MAX_AUTO_OPTION_WALK_METERS = 2414.016;
 const AUTO_SEARCH_DAYS_AHEAD = 0;
 const FIXED_ROUTE_SEARCH_DAYS_AHEAD = 1;
 const MIN_TRANSFER_MS = 3 * 60 * 1000;
+const MAX_DIRECT_WALK_CORRECTION_METERS = 1300;
+const MAX_OSRM_DIRECT_RATIO = 1.7;
 
 const destinations = {
   william: {
@@ -709,6 +712,18 @@ function walkFallback(from, to, error = "") {
   };
 }
 
+function directWalkingEstimate(from, to, source = "direct-distance walking estimate") {
+  const directMeters = haversineMeters(from, to);
+  const distance = directMeters * 1.25;
+  return {
+    distanceMeters: distance,
+    durationSeconds: distance / WALK_SPEED_MPS,
+    geometry: [[from.lng, from.lat], [to.lng, to.lat]],
+    source,
+    sourceOk: true
+  };
+}
+
 async function walkingRoute(from, to) {
   const key = [
     "walk",
@@ -724,6 +739,15 @@ async function walkingRoute(from, to) {
       const data = await fetchJson(url, { timeoutMs: 9000 });
       const route = data?.routes?.[0];
       if (!route) return walkFallback(from, to, "OSRM route missing");
+      const directMeters = haversineMeters(from, to);
+      const directEstimate = directMeters * 1.25;
+      if (
+        Number.isFinite(directMeters)
+        && directMeters <= MAX_DIRECT_WALK_CORRECTION_METERS
+        && Number(route.distance) > directEstimate * MAX_OSRM_DIRECT_RATIO
+      ) {
+        return directWalkingEstimate(from, to, "direct-distance walking estimate; OSRM path overlong");
+      }
       const walkingSeconds = Math.max(route.duration, route.distance / WALK_SPEED_MPS);
       return {
         distanceMeters: route.distance,
@@ -874,10 +898,10 @@ async function closestTrackedStop(point, routeIds = TRACKED_ROUTE_IDS, nowMs = D
 
 function planState(nowMs, leaveByMs, standByMs, busArrivalMs, walkSeconds) {
   const arrivalIfLeavingNow = nowMs + walkSeconds * 1000;
+  if (nowMs >= standByMs && nowMs <= busArrivalMs + BOARD_GRACE_MS) return "wait";
   if (nowMs <= leaveByMs) return "on_time";
   if (arrivalIfLeavingNow <= busArrivalMs - BOARD_GRACE_MS) return "walk_faster";
   if (arrivalIfLeavingNow > busArrivalMs - BOARD_GRACE_MS) return "miss";
-  if (nowMs >= standByMs && nowMs <= busArrivalMs + BOARD_GRACE_MS) return "wait";
   return "on_time";
 }
 
@@ -1008,7 +1032,12 @@ function journeyChoices(plans) {
 function visibleAutoChoices(plans) {
   const visible = [];
   const seen = new Set();
-  for (const plan of journeyChoices(plans).filter((item) => totalWalkingMeters(item) <= MAX_AUTO_OPTION_WALK_METERS)) {
+  const candidates = journeyChoices(plans).filter((item) => totalWalkingMeters(item) <= MAX_AUTO_OPTION_WALK_METERS);
+  const hasPreferredWalk = candidates.some((item) => totalWalkingMeters(item) <= PREFERRED_AUTO_OPTION_WALK_METERS);
+  const pool = hasPreferredWalk
+    ? candidates.filter((item) => totalWalkingMeters(item) <= PREFERRED_AUTO_OPTION_WALK_METERS)
+    : candidates;
+  for (const plan of pool) {
     const routeKey = (plan.routeIds || (plan.route?.id ? [plan.route.id] : [])).join("+");
     const arrivalKey = Math.round(Number(plan.timings?.destinationArrivalMs || plan.timings?.exitArrivalMs || 0) / 60000);
     const key = `${routeKey}:${arrivalKey}`;
@@ -1164,7 +1193,8 @@ function combineTransferPlan(firstPlan, secondPlan, transferWalk, nowMs) {
   const routeIds = [firstPlan.route.id, secondPlan.route.id];
   const firstLeg = planLeg(firstPlan, 1);
   const secondLeg = planLeg(secondPlan, 2);
-  const transferReadyMs = predictedExitMs(firstPlan) + Math.round(Number(transferWalk.durationSeconds || 0) * 1000) + MIN_TRANSFER_MS;
+  const minimumTransferMs = Number(transferWalk.distanceMeters || 0) > 25 ? MIN_TRANSFER_MS : 0;
+  const transferReadyMs = predictedExitMs(firstPlan) + Math.round(Number(transferWalk.durationSeconds || 0) * 1000) + minimumTransferMs;
   const scheduledDestinationArrivalMs = secondPlan.timings.exitArrivalMs
     + Math.round(Number(secondPlan.walking.fromExit.durationSeconds || 0) * 1000);
   const destinationArrivalMs = predictedExitMs(secondPlan)
@@ -1185,7 +1215,7 @@ function combineTransferPlan(firstPlan, secondPlan, transferWalk, nowMs) {
     kind: "transfer",
     destination: secondPlan.destination,
     origin: firstPlan.origin,
-    status: firstPlan.status === "miss" || secondPlan.status === "miss" ? "miss" : secondPlan.status,
+    status: firstPlan.status === "miss" || secondPlan.status === "miss" ? "miss" : firstPlan.status,
     route: {
       id: routeIds.join(" + "),
       lineId: firstPlan.route.lineId,
@@ -1273,12 +1303,13 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
         { allowTransfers: false, skipLive: true, boardLimit: 3, exitLimit: 2, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
       );
       const firstPlan = firstResult.plan;
-      if (!firstPlan) continue;
+      if (!firstPlan || firstPlan.status === "miss") continue;
       const transferWalk = await walkingRoute(firstPlan.exitStop, candidate.toStop);
       if (transferWalk.distanceMeters > MAX_TRANSFER_WALK_METERS) continue;
+      const minimumTransferMs = Number(transferWalk.distanceMeters || 0) > 25 ? MIN_TRANSFER_MS : 0;
       const transferReadyMs = predictedExitMs(firstPlan)
         + Math.round(Number(transferWalk.durationSeconds || 0) * 1000)
-        + MIN_TRANSFER_MS;
+        + minimumTransferMs;
       const secondResult = await createPlan(
         candidate.toStop,
         destination.id || "destination",
@@ -1288,7 +1319,7 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
         { allowTransfers: false, skipLive: true, boardLimit: 2, exitLimit: 3, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
       );
       const secondPlan = secondResult.plan;
-      if (!secondPlan) continue;
+      if (!secondPlan || secondPlan.status === "miss") continue;
       plans.push(combineTransferPlan(firstPlan, secondPlan, transferWalk, nowMs));
     } catch {
       // Transfer options are opportunistic; direct plans remain available.
