@@ -40,6 +40,14 @@ const MIN_TRANSFER_MS = 3 * 60 * 1000;
 const MAX_DIRECT_WALK_CORRECTION_METERS = 1300;
 const MAX_OSRM_DIRECT_RATIO = 1.7;
 const PLANNING_WARM_ROUTE_IDS = ["2", "3", "4", "11", "23", "24", "26", "30", "31", "33"];
+const PLANNING_WARM_TRIPS = [
+  ["wpi", "blackstone"],
+  ["wpi", "chipotle"],
+  ["alden", "blackstone"],
+  ["alden", "chipotle"],
+  ["william", "blackstone"],
+  ["william", "chipotle"]
+];
 
 const destinations = {
   william: {
@@ -125,6 +133,14 @@ function resolveDestination(destinationId = "chipotle", customDestination = null
     };
   }
   return savedDestinationByQuery(destinationId) || destinations[destinationId] || destinations.chipotle;
+}
+
+function planningWarmOrigin(originId) {
+  if (originId === "wpi") {
+    return { lat: 42.2748238, lng: -71.8078867 };
+  }
+  const origin = destinations[originId];
+  return origin ? { lat: origin.lat, lng: origin.lng } : null;
 }
 
 const mimeTypes = {
@@ -1496,20 +1512,22 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
       .filter((result) => result.ok && isUsableWalkingRoute(result.value?.walkFromExit))
       .map((result) => result.value);
 
-    for (const boardCandidate of usableBoardCandidates) {
+    const routePlanResults = await mapLimit(usableBoardCandidates, Math.min(4, usableBoardCandidates.length), async (boardCandidate) => {
+      const routePlans = [];
       const boardStop = boardCandidate.stop;
       const walkToBoard = boardCandidate.walkToBoard;
       const walkSeconds = walkToBoard.durationSeconds;
+      const departureResults = await mapLimit(departureDates, Math.min(2, departureDates.length), async (serviceDate) => {
+        const rows = await getDepartures(boardStop.id, serviceDate);
+        return (rows || [])
+          .filter((row) => row.routeId === route.routeId && (!row.serviceDate || row.serviceDate === serviceDate))
+          .map((row) => ({ ...row, serviceDate: row.serviceDate || serviceDate }));
+      });
       const departures = [];
-      for (const serviceDate of departureDates) {
-        try {
-          const rows = await getDepartures(boardStop.id, serviceDate);
-          for (const row of rows || []) {
-            if (row.routeId === route.routeId && (!row.serviceDate || row.serviceDate === serviceDate)) {
-              departures.push({ ...row, serviceDate: row.serviceDate || serviceDate });
-            }
-          }
-        } catch {
+      for (const result of departureResults) {
+        if (result.ok) {
+          departures.push(...result.value);
+        } else {
           sources.push(sourceStatus(`Ride Guide departures ${boardStop.code}`, false));
         }
       }
@@ -1520,13 +1538,14 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
         .sort((a, b) => a.departureMs - b.departureMs)
         .slice(0, departureLimit);
 
-      for (const departure of usableDepartures) {
-        let trip;
-        try {
-          trip = await getTrip(departure.tripId);
-        } catch {
-          continue;
-        }
+      const tripResults = await mapLimit(usableDepartures, Math.min(4, usableDepartures.length), async (departure) => ({
+        departure,
+        trip: await getTrip(departure.tripId)
+      }));
+
+      for (const result of tripResults) {
+        if (!result.ok || !result.value?.trip) continue;
+        const { departure, trip } = result.value;
         const boardTime = (trip.stopTimes || []).find((stopTime) => stopTime.id === boardStop.id);
         if (!boardTime) continue;
         const boardSequence = Number(boardTime.sequence);
@@ -1538,7 +1557,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
           if (!exitTime || Number(exitTime.sequence) <= boardSequence) continue;
           const exitArrivalMs = timeStringToMs(departure.serviceDate, exitTime.time);
           const walkFromExit = exitCandidate.walkFromExit;
-          const prediction = !options.skipPredictions && departure.serviceDate === today
+          const prediction = options.eagerPredictions && !options.skipPredictions && departure.serviceDate === today
             ? await stopPredictions(boardStop, trip.headsign, nowMs, boardArrivalMs, route.lineId)
             : null;
           const busArrivalMs = prediction?.predictedMs || boardArrivalMs;
@@ -1570,7 +1589,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
               stop: compactStop(stopById.get(stopTime.id))
             }));
 
-          possiblePlans.push({
+          routePlans.push({
             generatedAt: new Date(nowMs).toISOString(),
             destination,
             origin,
@@ -1608,6 +1627,11 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
           });
         }
       }
+      return routePlans;
+    });
+
+    for (const result of routePlanResults) {
+      if (result.ok && Array.isArray(result.value)) possiblePlans.push(...result.value);
     }
 
     if (routeSelection.auto && possiblePlans.some((plan) => plan.status !== "miss")) {
@@ -1934,4 +1958,22 @@ server.listen(port, () => {
       // Route warmup is best-effort; live requests still fetch on demand.
     }
   }).catch(() => {});
+  setTimeout(() => {
+    mapLimit(PLANNING_WARM_TRIPS, 1, async ([originId, destinationId]) => {
+      const origin = planningWarmOrigin(originId);
+      if (!origin) return;
+      try {
+        await createPlan(
+          origin,
+          destinationId,
+          Date.now(),
+          "",
+          null,
+          { skipLive: true, skipPredictions: true }
+        );
+      } catch {
+        // Plan warmup is best-effort; the UI still plans on demand.
+      }
+    }).catch(() => {});
+  }, 1500);
 });

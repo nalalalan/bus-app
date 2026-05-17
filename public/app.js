@@ -130,6 +130,7 @@ let selectedLocationRequestId = 0;
 let locateMapButton = null;
 let resetMapButton = null;
 let planPrefetchRunning = false;
+let programmaticCameraUntil = 0;
 const prefetchedPlanKeys = new Set();
 
 function api(path) {
@@ -242,6 +243,18 @@ function addMapControls() {
   };
   actionControl.addTo(map);
   L.control.zoom({ position: "topleft" }).addTo(map);
+  map.on("dragstart zoomstart", handleManualCameraMove);
+}
+
+function markProgrammaticCameraMove() {
+  programmaticCameraUntil = Date.now() + 900;
+}
+
+function handleManualCameraMove() {
+  if (Date.now() < programmaticCameraUntil) return;
+  if (!followVehicleKey) return;
+  followVehicleKey = "";
+  renderBusList();
 }
 
 function routeColor(routeId) {
@@ -755,6 +768,7 @@ function focusVehicle(key) {
   updateRouteStyles();
   renderBusList();
   setStatus(`Route ${vehicle.routeId} bus ${vehicle.equipment || vehicle.id}`);
+  markProgrammaticCameraMove();
   map.setView([vehicle.lat, vehicle.lng], 17, { animate: false });
   const marker = busMarkers.get(key);
   if (marker) marker.openTooltip();
@@ -798,18 +812,25 @@ function renderBuses() {
   }
   if (followVehicleKey && busMarkers.has(followVehicleKey)) {
     const followed = estimatedVehicle(vehicleSamples.get(followVehicleKey));
-    if (followed) map.setView([followed.lat, followed.lng], Math.max(map.getZoom(), 17), { animate: true });
+    if (followed) {
+      markProgrammaticCameraMove();
+      map.setView([followed.lat, followed.lng], Math.max(map.getZoom(), 17), { animate: true });
+    }
   }
 }
 
 function fitBounds(points, fallbackZoom = 12) {
   const validPoints = points.filter((point) => point && Number.isFinite(point.lat) && Number.isFinite(point.lng));
   if (!validPoints.length) {
+    markProgrammaticCameraMove();
     map.setView([42.2623388, -71.8011645], fallbackZoom);
     return;
   }
   const bounds = L.latLngBounds(validPoints.map((point) => [point.lat, point.lng]));
-  if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
+  if (bounds.isValid()) {
+    markProgrammaticCameraMove();
+    map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
+  }
 }
 
 function fitCurrentAndLocation(location, fallbackZoom = 13) {
@@ -864,6 +885,7 @@ async function centerOnCurrentLocation() {
     setStatus(gpsStatus);
     return;
   }
+  markProgrammaticCameraMove();
   map.setView([currentLocation.lat, currentLocation.lng], Math.max(map.getZoom(), 17), { animate: true });
   setStatus("Current location");
 }
@@ -973,7 +995,7 @@ function refreshSelectedLocationView() {
     atSelectedPlace: isAtSelectedPlace(selectedArrivalData.location)
   };
   renderSelectedStop(selectedArrivalData, context);
-  drawSelectedData(selectedArrivalData, { preserveView: Boolean(followVehicleKey) });
+  drawSelectedData(selectedArrivalData, { preserveView: true });
 }
 
 function startLocationWatch() {
