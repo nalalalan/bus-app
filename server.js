@@ -28,10 +28,11 @@ const MAX_AUTO_DEPARTURES_PER_STOP = 5;
 const MAX_TRANSFER_FIRST_ROUTES = 14;
 const MAX_TRANSFER_SECOND_ROUTES = 8;
 const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 2;
-const MAX_TRANSFER_PLANS = 24;
+const MAX_TRANSFER_PLANS = 96;
 const MAX_TRANSFER_WALK_METERS = 550;
 const PREFERRED_AUTO_OPTION_WALK_METERS = 1609.344;
 const MAX_AUTO_OPTION_WALK_METERS = 2414.016;
+const MAX_FALLBACK_OPTION_WALK_METERS = 5632.704;
 const AUTO_SEARCH_DAYS_AHEAD = 0;
 const FIXED_ROUTE_SEARCH_DAYS_AHEAD = 1;
 const MIN_TRANSFER_MS = 3 * 60 * 1000;
@@ -1032,11 +1033,19 @@ function journeyChoices(plans) {
 function visibleAutoChoices(plans) {
   const visible = [];
   const seen = new Set();
-  const candidates = journeyChoices(plans).filter((item) => totalWalkingMeters(item) <= MAX_AUTO_OPTION_WALK_METERS);
-  const hasPreferredWalk = candidates.some((item) => totalWalkingMeters(item) <= PREFERRED_AUTO_OPTION_WALK_METERS);
+  const allChoices = journeyChoices(plans);
+  const candidates = allChoices.filter((item) => totalWalkingMeters(item) <= MAX_AUTO_OPTION_WALK_METERS);
+  const fallbackCandidates = allChoices.filter((item) => totalWalkingMeters(item) <= MAX_FALLBACK_OPTION_WALK_METERS);
+  const transferFallbackCandidates = fallbackCandidates.filter((item) => item.kind === "transfer");
+  const poolBase = candidates.length
+    ? candidates
+    : transferFallbackCandidates.length
+      ? transferFallbackCandidates
+      : fallbackCandidates;
+  const hasPreferredWalk = poolBase.some((item) => totalWalkingMeters(item) <= PREFERRED_AUTO_OPTION_WALK_METERS);
   const pool = hasPreferredWalk
-    ? candidates.filter((item) => totalWalkingMeters(item) <= PREFERRED_AUTO_OPTION_WALK_METERS)
-    : candidates;
+    ? poolBase.filter((item) => totalWalkingMeters(item) <= PREFERRED_AUTO_OPTION_WALK_METERS)
+    : poolBase;
   for (const plan of pool) {
     const routeKey = (plan.routeIds || (plan.route?.id ? [plan.route.id] : [])).join("+");
     const arrivalKey = Math.round(Number(plan.timings?.destinationArrivalMs || plan.timings?.exitArrivalMs || 0) / 60000);
@@ -1555,7 +1564,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
     }
   } else {
     sources.push(sourceStatus("Ride Guide candidate schedules", false, {
-      detail: routeSelection.auto ? "no low-walk trip today" : "no feasible plan"
+      detail: routeSelection.auto ? "no same-day trip found" : "no feasible plan"
     }));
   }
 
@@ -1570,7 +1579,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   return {
     ok: Boolean(plan),
     error: plan ? "" : routeSelection.auto
-      ? `No low-walk trip today; options over ${formatMiles(MAX_AUTO_OPTION_WALK_METERS)} hidden`
+      ? `No same-day trip found within ${formatMiles(MAX_FALLBACK_OPTION_WALK_METERS)} walking`
       : "No feasible plan",
     plan,
     selectedChoiceIndex: planIndex,
@@ -1600,7 +1609,9 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
     },
     policy: {
       searchDaysAhead,
-      maxAutoOptionWalkingMeters: MAX_AUTO_OPTION_WALK_METERS
+      preferredAutoOptionWalkingMeters: PREFERRED_AUTO_OPTION_WALK_METERS,
+      maxAutoOptionWalkingMeters: MAX_AUTO_OPTION_WALK_METERS,
+      maxFallbackOptionWalkingMeters: MAX_FALLBACK_OPTION_WALK_METERS
     }
   };
 }

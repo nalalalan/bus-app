@@ -1213,12 +1213,21 @@ async function selectLocation(locationId, choiceIndex = 0) {
     if (requestId !== selectedLocationRequestId) return;
     if (selectedStopLayer) selectedStopLayer.remove();
     const lowWalkMiss = String(error.message || "").toLowerCase().includes("no low-walk");
-    els.selectedStopName.textContent = lowWalkMiss ? "No low-walk trip today" : "Stop unavailable";
+    const sameDayMiss = String(error.message || "").toLowerCase().includes("no same-day");
+    els.selectedStopName.textContent = lowWalkMiss
+      ? "No low-walk trip today"
+      : sameDayMiss
+        ? "No same-day trip"
+        : "Stop unavailable";
     els.selectedStopDetail.textContent = error.message;
     els.arrivalList.innerHTML = "";
     selectedPlanData = { choices: [], error: error.message };
     renderTripOptions();
-    setStatus(lowWalkMiss ? `${location.name} - no low-walk trip today` : "Stop unavailable");
+    setStatus(lowWalkMiss
+      ? `${location.name} - no low-walk trip today`
+      : sameDayMiss
+        ? `${location.name} - no same-day trip`
+        : "Stop unavailable");
   }
 }
 
