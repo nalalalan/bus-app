@@ -186,10 +186,38 @@ function sourceStatus(name, ok, detail = {}) {
 async function memo(key, ttlMs, loader) {
   const now = Date.now();
   const existing = cache.get(key);
-  if (existing && now - existing.savedAt < ttlMs) return existing.value;
-  const value = await loader();
-  cache.set(key, { savedAt: now, value });
+  if (existing && (existing.pending || now - existing.savedAt < ttlMs)) return existing.value;
+  const pending = Promise.resolve().then(loader);
+  cache.set(key, { savedAt: now, value: pending, pending: true });
+  let value;
+  try {
+    value = await pending;
+  } catch (error) {
+    if (cache.get(key)?.value === pending) cache.delete(key);
+    throw error;
+  }
+  cache.set(key, { savedAt: Date.now(), value });
   return value;
+}
+
+function planCacheKey({ lat, lng, destinationId, customDestination, routeId, nowMs, choiceOffset, targetArrivalMs }) {
+  const destinationKey = customDestination
+    ? [
+        customDestination.id || "custom",
+        Number(customDestination.lat).toFixed(4),
+        Number(customDestination.lng).toFixed(4)
+      ].join(",")
+    : destinationId;
+  return [
+    "plan-v4",
+    Number(lat).toFixed(4),
+    Number(lng).toFixed(4),
+    destinationKey,
+    routeId || "auto",
+    Number.isFinite(choiceOffset) ? choiceOffset : 0,
+    Number.isFinite(targetArrivalMs) ? Math.round(targetArrivalMs / 60000) : "leave-now",
+    Math.floor(Number(nowMs) / 60000)
+  ].join(":");
 }
 
 async function mapLimit(items, limit, mapper) {
@@ -1452,10 +1480,25 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
     boardCandidateCount += candidateStops.length;
     exitCandidateCount += exitCandidates.length;
 
-    for (const boardCandidate of candidateStops) {
+    const boardWalkResults = await mapLimit(candidateStops, Math.min(4, candidateStops.length), async (candidate) => ({
+      ...candidate,
+      walkToBoard: await walkingRoute(origin, candidate.stop)
+    }));
+    const usableBoardCandidates = boardWalkResults
+      .filter((result) => result.ok && isUsableWalkingRoute(result.value?.walkToBoard))
+      .map((result) => result.value);
+
+    const exitWalkResults = await mapLimit(exitCandidates, Math.min(4, exitCandidates.length), async (candidate) => ({
+      ...candidate,
+      walkFromExit: await walkingRoute(candidate.stop, destination)
+    }));
+    const usableExitCandidates = exitWalkResults
+      .filter((result) => result.ok && isUsableWalkingRoute(result.value?.walkFromExit))
+      .map((result) => result.value);
+
+    for (const boardCandidate of usableBoardCandidates) {
       const boardStop = boardCandidate.stop;
-      const walkToBoard = await walkingRoute(origin, boardStop);
-      if (!isUsableWalkingRoute(walkToBoard)) continue;
+      const walkToBoard = boardCandidate.walkToBoard;
       const walkSeconds = walkToBoard.durationSeconds;
       const departures = [];
       for (const serviceDate of departureDates) {
@@ -1489,13 +1532,12 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
         const boardSequence = Number(boardTime.sequence);
         const boardArrivalMs = timeStringToMs(departure.serviceDate, boardTime.time);
 
-        for (const exitCandidate of exitCandidates) {
+        for (const exitCandidate of usableExitCandidates) {
           const exitStop = exitCandidate.stop;
           const exitTime = (trip.stopTimes || []).find((stopTime) => stopTime.id === exitStop.id);
           if (!exitTime || Number(exitTime.sequence) <= boardSequence) continue;
           const exitArrivalMs = timeStringToMs(departure.serviceDate, exitTime.time);
-          const walkFromExit = await walkingRoute(exitStop, destination);
-          if (!isUsableWalkingRoute(walkFromExit)) continue;
+          const walkFromExit = exitCandidate.walkFromExit;
           const prediction = !options.skipPredictions && departure.serviceDate === today
             ? await stopPredictions(boardStop, trip.headsign, nowMs, boardArrivalMs, route.lineId)
             : null;
@@ -1595,7 +1637,8 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   const plan = planIndex >= 0 ? choices[planIndex] : null;
 
   if (plan) {
-    if (!options.skipPredictions && !plan.prediction) {
+    const planServiceDate = plan.timings?.serviceDate || "";
+    if (!options.skipPredictions && !plan.prediction && planServiceDate === today) {
       try {
         await attachSelectedPrediction(plan, nowMs);
       } catch {
@@ -1604,10 +1647,14 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
     }
     const liveRoute = Array.isArray(plan.legs) && plan.legs.length ? plan.legs[0].route : plan.route;
     sources.push(sourceStatus(`Ride Guide route ${plan.route.id} schedule`, true));
-    if (!options.skipLive) {
+    if (!options.skipLive && planServiceDate === today) {
       const live = await getLiveVehicles(liveRoute.id, liveRoute.lineId);
       plan.vehicle = matchVehicle(live.vehicles, liveRoute.headsign);
       sources.push(live.status);
+    } else if (!options.skipLive) {
+      sources.push(sourceStatus("WRTA live vehicles", false, {
+        detail: "not a same-day trip"
+      }));
     }
   } else {
     sources.push(sourceStatus("Ride Guide candidate schedules", false, {
@@ -1802,17 +1849,30 @@ async function handleApi(req, res, requestUrl) {
       sendJson(res, 400, { ok: false, error: "lat and lng are required" });
       return true;
     }
-    const result = await createPlan(
+    const nowMs = Number.isFinite(now) ? now : Date.now();
+    const normalizedChoiceOffset = Number.isFinite(choiceOffset) ? choiceOffset : 0;
+    const normalizedTargetArrivalMs = Number.isFinite(targetArrivalMs) ? targetArrivalMs : NaN;
+    const cacheKey = planCacheKey({
+      lat,
+      lng,
+      destinationId,
+      customDestination,
+      routeId,
+      nowMs,
+      choiceOffset: normalizedChoiceOffset,
+      targetArrivalMs: normalizedTargetArrivalMs
+    });
+    const result = await memo(cacheKey, 45 * 1000, () => createPlan(
       { lat, lng },
       destinationId,
-      Number.isFinite(now) ? now : Date.now(),
+      nowMs,
       routeId,
       customDestination,
       {
-        choiceOffset: Number.isFinite(choiceOffset) ? choiceOffset : 0,
-        targetArrivalMs: Number.isFinite(targetArrivalMs) ? targetArrivalMs : NaN
+        choiceOffset: normalizedChoiceOffset,
+        targetArrivalMs: normalizedTargetArrivalMs
       }
-    );
+    ));
     sendJson(res, result.ok ? 200 : 404, result);
     return true;
   }

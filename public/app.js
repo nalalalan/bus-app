@@ -1,4 +1,5 @@
 const ROUTES = ["2", "4", "3", "31"];
+const PLANNING_ROUTE_IDS = ["11", "23", "24", "26", "27", "30", "33"];
 const LOCATIONS = [
   {
     id: "william",
@@ -126,6 +127,10 @@ let gpsRequestPromise = null;
 let gpsPermissionStatus = null;
 let locationWatchId = null;
 let selectedLocationRequestId = 0;
+let locateMapButton = null;
+let resetMapButton = null;
+let planPrefetchRunning = false;
+const prefetchedPlanKeys = new Set();
 
 function api(path) {
   return fetch(path, { cache: "no-store" }).then(async (response) => {
@@ -133,6 +138,46 @@ function api(path) {
     if (!response.ok) throw new Error(json.error || `${response.status}`);
     return json;
   });
+}
+
+function planRequestPath(location, choiceIndex = 0) {
+  return `/api/plan?lat=${encodeURIComponent(currentLocation.lat)}&lng=${encodeURIComponent(currentLocation.lng)}&destination=${encodeURIComponent(location.id)}&choice=${encodeURIComponent(choiceIndex)}&now=${Date.now()}`;
+}
+
+function planPrefetchKey(location) {
+  if (!hasGpsLocation()) return "";
+  return [
+    location.id,
+    currentLocation.lat.toFixed(4),
+    currentLocation.lng.toFixed(4),
+    Math.floor(Date.now() / 60000)
+  ].join(":");
+}
+
+async function prefetchLocationPlans() {
+  if (planPrefetchRunning || !hasGpsLocation()) return;
+  planPrefetchRunning = true;
+  try {
+    const locations = [
+      ...LOCATIONS.filter((location) => location.id === selectedLocationId),
+      ...LOCATIONS.filter((location) => location.id !== selectedLocationId)
+    ];
+    for (const location of locations) {
+      if (!hasGpsLocation()) break;
+      const key = planPrefetchKey(location);
+      if (!key || prefetchedPlanKeys.has(key)) continue;
+      prefetchedPlanKeys.add(key);
+      api(planRequestPath(location)).catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  } finally {
+    planPrefetchRunning = false;
+  }
+}
+
+function schedulePlanPrefetch() {
+  if (!hasGpsLocation()) return;
+  setTimeout(prefetchLocationPlans, 300);
 }
 
 function escapeHtml(value) {
@@ -146,7 +191,7 @@ function escapeHtml(value) {
 
 function initMap() {
   map = L.map("map", {
-    zoomControl: true,
+    zoomControl: false,
     attributionControl: true
   }).setView([42.2623388, -71.8011645], 12);
 
@@ -154,6 +199,49 @@ function initMap() {
     maxZoom: 20,
     attribution: "&copy; OpenStreetMap"
   }).addTo(map);
+
+  addMapControls();
+}
+
+function mapControlIcon(kind) {
+  if (kind === "locate") {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3v3m0 12v3M3 12h3m12 0h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="12" cy="12" r="5.2" fill="none" stroke="currentColor" stroke-width="2"/>
+      <circle cx="12" cy="12" r="1.7" fill="currentColor"/>
+    </svg>`;
+  }
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M7 6h6a4 4 0 0 1 0 8H8a3 3 0 0 0 0 6h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="m5 8 2-2 2 2m8 10 2 2 2-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function addMapButton(container, className, title, icon, handler) {
+  const button = L.DomUtil.create("button", `map-action-button ${className}`, container);
+  button.type = "button";
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.innerHTML = icon;
+  L.DomEvent.on(button, "click", (event) => {
+    L.DomEvent.stop(event);
+    handler();
+  });
+  return button;
+}
+
+function addMapControls() {
+  const actionControl = L.control({ position: "topleft" });
+  actionControl.onAdd = () => {
+    const container = L.DomUtil.create("div", "leaflet-control map-control-stack");
+    L.DomEvent.disableClickPropagation(container);
+    L.DomEvent.disableScrollPropagation(container);
+    locateMapButton = addMapButton(container, "locate", "Center on current location", mapControlIcon("locate"), centerOnCurrentLocation);
+    resetMapButton = addMapButton(container, "route-reset", "Show selected route", mapControlIcon("route"), resetRouteView);
+    return container;
+  };
+  actionControl.addTo(map);
+  L.control.zoom({ position: "topleft" }).addTo(map);
 }
 
 function routeColor(routeId) {
@@ -387,8 +475,8 @@ function renderTripOptions(planData = selectedPlanData) {
   if (!els.optionList) return;
   const choices = planData?.choices || [];
   if (!choices.length) {
-    const title = planData?.error ? "No low-walk options" : selectedLocationId ? "GPS needed" : "No options yet";
-    const detail = planData?.error || (selectedLocationId ? "Allow location for route options" : "Select a destination");
+    const title = planData?.pending ? "Planning trip" : planData?.error ? "No low-walk options" : selectedLocationId ? "GPS needed" : "No options yet";
+    const detail = planData?.pending ? "WRTA times and walking route" : planData?.error || (selectedLocationId ? "Allow location for route options" : "Select a destination");
     els.optionList.innerHTML = `<div class="option-row muted"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
     return;
   }
@@ -487,6 +575,21 @@ function renderSelectedStop(data = null, context = {}) {
     }).join("")
     : `<div class="arrival-row muted"><strong>No WRTA times</strong><span>${escapeHtml(stop.name || "")}</span></div>`;
   renderTripOptions();
+}
+
+function renderPlanningSelection(location) {
+  selectedPlanData = { choices: [], pending: true };
+  els.selectedStopName.textContent = location?.name || "Planning trip";
+  els.selectedStopDetail.textContent = hasGpsLocation()
+    ? "Planning WRTA trip from current location"
+    : "GPS needed for route options";
+  els.arrivalList.innerHTML = `<div class="arrival-row muted"><strong>Planning WRTA trip</strong><span>${escapeHtml(location?.address || "")}</span></div>`;
+  renderTripOptions();
+}
+
+function showPlanningPreview(location) {
+  clearSelectedLayers();
+  if (location) fitCurrentAndLocation(location, 13);
 }
 
 function setStatus(text) {
@@ -709,6 +812,11 @@ function fitBounds(points, fallbackZoom = 12) {
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 16 });
 }
 
+function fitCurrentAndLocation(location, fallbackZoom = 13) {
+  const points = [hasGpsLocation() ? currentLocation : null, location].filter(Boolean);
+  fitBounds(points, fallbackZoom);
+}
+
 function updateRouteStyles() {
   for (const [routeId, layer] of routeLayers.entries()) {
     const selected = selectedRouteId && routeId === selectedRouteId;
@@ -746,6 +854,39 @@ function fitBuses(routeId = "") {
 
 function fitLocations() {
   fitBounds(LOCATIONS, 12);
+}
+
+async function centerOnCurrentLocation() {
+  followVehicleKey = "";
+  renderBusList();
+  await ensureCurrentLocation();
+  if (!hasGpsLocation()) {
+    setStatus(gpsStatus);
+    return;
+  }
+  map.setView([currentLocation.lat, currentLocation.lng], Math.max(map.getZoom(), 17), { animate: true });
+  setStatus("Current location");
+}
+
+function resetRouteView() {
+  followVehicleKey = "";
+  renderBusList();
+  if (selectedArrivalData) {
+    drawSelectedData(selectedArrivalData, { preserveView: false });
+    const routeText = selectedArrivalData.routeIds?.length
+      ? routeSequenceText(selectedArrivalData.routeIds)
+      : `Route ${selectedArrivalData.route?.id || selectedRouteId || "--"}`;
+    setStatus(`${selectedArrivalData.location?.name || "Selected trip"} - ${routeText}`);
+    return;
+  }
+  const selectedLocation = LOCATIONS.find((location) => location.id === selectedLocationId);
+  if (selectedLocation) {
+    fitCurrentAndLocation(selectedLocation, 13);
+    setStatus(`${selectedLocation.name} - route view`);
+    return;
+  }
+  fitAll();
+  setStatus("Route view");
 }
 
 function renderCurrentLocation() {
@@ -798,6 +939,7 @@ function setCurrentLocationFromPosition(position) {
   };
   setGpsStatus("GPS on");
   renderCurrentLocation();
+  schedulePlanPrefetch();
 }
 
 async function readGpsPermissionState() {
@@ -1190,7 +1332,7 @@ async function ensurePlanRoutesLoaded(data) {
   }
   await Promise.all([...routeIds]
     .filter((routeId) => routeId && !routeDataById.has(routeId))
-    .map((routeId) => loadRoute(routeId).catch(() => null)));
+    .map((routeId) => fetchRouteData(routeId).catch(() => null)));
 }
 
 async function selectLocation(locationId, choiceIndex = 0) {
@@ -1202,15 +1344,21 @@ async function selectLocation(locationId, choiceIndex = 0) {
   selectedPlanData = null;
   selectedChoiceIndex = Number(choiceIndex) || 0;
   selectedLocationId = location.id;
+  selectedRouteId = "";
+  updateRouteStyles();
   renderLocations();
-  renderSelectedStop();
-  setStatus(`Loading ${location.name}`);
+  renderPlanningSelection(location);
+  showPlanningPreview(location);
+  setStatus(`Planning ${location.name}`);
 
   try {
     await ensureCurrentLocation();
+    if (requestId !== selectedLocationRequestId) return;
+    renderPlanningSelection(location);
+    showPlanningPreview(location);
     let data;
     if (hasGpsLocation()) {
-      const planData = await api(`/api/plan?lat=${encodeURIComponent(currentLocation.lat)}&lng=${encodeURIComponent(currentLocation.lng)}&destination=${encodeURIComponent(location.id)}&choice=${encodeURIComponent(selectedChoiceIndex)}&now=${Date.now()}`);
+      const planData = await api(planRequestPath(location, selectedChoiceIndex));
       selectedPlanData = planData;
       selectedChoiceIndex = planData.selectedChoiceIndex || 0;
       data = normalizePlanArrivals(planData, location);
@@ -1259,11 +1407,24 @@ async function selectLocation(locationId, choiceIndex = 0) {
   }
 }
 
-async function loadRoute(routeId) {
+async function fetchRouteData(routeId) {
+  if (routeDataById.has(routeId)) return routeDataById.get(routeId);
   const data = await api(`/api/route?routeId=${encodeURIComponent(routeId)}`);
   routeDataById.set(routeId, data);
   const color = data.line?.color || data.shapes?.features?.[0]?.properties?.routeColor || routeColor(routeId);
   routeColors.set(routeId, normalizeColor(color, routeColor(routeId)));
+  routeState.set(routeId, {
+    ...(routeState.get(routeId) || {}),
+    routeId,
+    name: data.line?.longName || `Route ${routeId}`,
+    ok: true,
+    error: ""
+  });
+  return data;
+}
+
+async function loadRoute(routeId) {
+  const data = await fetchRouteData(routeId);
   if (routeLayers.has(routeId)) routeLayers.get(routeId).remove();
   const layer = L.geoJSON(data.shapes, {
     style: {
@@ -1273,14 +1434,14 @@ async function loadRoute(routeId) {
     }
   }).addTo(map);
   routeLayers.set(routeId, layer);
-  routeState.set(routeId, {
-    ...(routeState.get(routeId) || {}),
-    routeId,
-    name: data.line?.longName || `Route ${routeId}`,
-    ok: true,
-    error: ""
-  });
   updateRouteStyles();
+}
+
+function preloadPlanningRouteData() {
+  Promise.all(PLANNING_ROUTE_IDS
+    .filter((routeId) => !ROUTES.includes(routeId) && !routeDataById.has(routeId))
+    .map((routeId) => fetchRouteData(routeId).catch(() => null)))
+    .catch(() => {});
 }
 
 async function loadLive(routeId) {
@@ -1315,6 +1476,7 @@ async function loadAllRoutes() {
     }
   }));
   fitAll();
+  preloadPlanningRouteData();
 }
 
 async function refreshLive() {
