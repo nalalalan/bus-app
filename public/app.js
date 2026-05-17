@@ -902,15 +902,31 @@ function midpoint(a, b) {
   };
 }
 
-function addWalkingConnector(layers, from, to, label) {
+function walkingGeometryPoints(walking) {
+  const geometry = Array.isArray(walking?.geometry) ? walking.geometry : [];
+  return geometry
+    .map((point) => Array.isArray(point)
+      ? { lat: Number(point[1]), lng: Number(point[0]) }
+      : { lat: Number(point?.lat), lng: Number(point?.lng) })
+    .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+}
+
+function addWalkingConnector(layers, from, to, label, walking = null) {
   if (!from || !to) return;
-  layers.push(L.polyline([[from.lat, from.lng], [to.lat, to.lng]], {
+  const routePoints = walkingGeometryPoints(walking);
+  const linePoints = routePoints.length > 1
+    ? routePoints.map((point) => [point.lat, point.lng])
+    : [[from.lat, from.lng], [to.lat, to.lng]];
+  layers.push(L.polyline(linePoints, {
     color: "#171717",
     weight: 3,
     opacity: 0.72,
     dashArray: "5 6"
   }));
-  layers.push(L.marker(midpoint(from, to), {
+  const labelPoint = routePoints.length > 1
+    ? routePoints[Math.floor(routePoints.length / 2)]
+    : midpoint(from, to);
+  layers.push(L.marker([labelPoint.lat, labelPoint.lng], {
     icon: walkLabelIcon(label),
     interactive: false,
     keyboard: false
@@ -1053,7 +1069,10 @@ function drawSelectedJourney(data, options = {}) {
   const points = [data.location, gpsLocation].filter(Boolean);
   const seenStops = new Set();
 
-  if (gpsLocation && data.boardingStop) addWalkingConnector(connectors, gpsLocation, data.boardingStop, "walk to stop");
+  if (gpsLocation && data.boardingStop) {
+    addWalkingConnector(connectors, gpsLocation, data.boardingStop, "walk to stop", data.walking?.toBoard);
+    points.push(...walkingGeometryPoints(data.walking?.toBoard));
+  }
 
   data.legs.forEach((leg, index) => {
     const routeId = leg.route?.id;
@@ -1091,10 +1110,14 @@ function drawSelectedJourney(data, options = {}) {
 
   for (const transfer of data.transfers || []) {
     if (transfer.fromStop && transfer.toStop && transfer.fromStop.id !== transfer.toStop.id) {
-      addWalkingConnector(connectors, transfer.fromStop, transfer.toStop, "transfer");
+      addWalkingConnector(connectors, transfer.fromStop, transfer.toStop, "transfer", transfer.walking);
+      points.push(...walkingGeometryPoints(transfer.walking));
     }
   }
-  if (data.exitStop && data.location) addWalkingConnector(connectors, data.exitStop, data.location, "walk from stop");
+  if (data.exitStop && data.location) {
+    addWalkingConnector(connectors, data.exitStop, data.location, "walk from stop", data.walking?.fromExit);
+    points.push(...walkingGeometryPoints(data.walking?.fromExit));
+  }
 
   selectedConnectorLayer = L.layerGroup(connectors).addTo(map);
   selectedTripLayer = L.layerGroup(tripLayers).addTo(map);
@@ -1123,18 +1146,22 @@ function drawSelectedTrip(location, stop, routeId = selectedRouteId, options = {
   }
 
   const connectors = [];
-  if (gpsLocation && originStop) addWalkingConnector(connectors, gpsLocation, originStop, "walk to stop");
+  const points = [location, stop, gpsLocation, originStop, ...segment].filter(Boolean);
+  if (gpsLocation && originStop) {
+    addWalkingConnector(connectors, gpsLocation, originStop, "walk to stop", options.walking?.toBoard);
+    points.push(...walkingGeometryPoints(options.walking?.toBoard));
+  }
   if (atSelectedPlace) {
     addWalkingConnector(connectors, location, stop, "walk to stop");
   } else {
-    addWalkingConnector(connectors, stop, location, "walk from stop");
+    addWalkingConnector(connectors, stop, location, "walk from stop", options.walking?.fromExit);
+    points.push(...walkingGeometryPoints(options.walking?.fromExit));
   }
   selectedConnectorLayer = L.layerGroup(connectors).addTo(map);
   selectedTripLayer = L.layerGroup(tripLayers).addTo(map);
   const routeStops = routeStopsAlongSegment(routeId, segment, originStop, stop);
   drawStopMarkers(routeId, routeStops, originStop, stop);
 
-  const points = [location, stop, gpsLocation, originStop, ...segment].filter(Boolean);
   if (!options.preserveView) fitBounds(points, 15);
 }
 
@@ -1147,6 +1174,7 @@ function drawSelectedData(data, options = {}) {
   if (data.mode === "trip") {
     drawSelectedTrip(data.location, data.exitStop, data.route.id, {
       originStop: data.boardingStop,
+      walking: data.walking,
       preserveView: options.preserveView
     });
     return;

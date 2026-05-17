@@ -22,13 +22,13 @@ const MAX_BOARD_CANDIDATES = 10;
 const MAX_DEPARTURES_PER_STOP = 10;
 const MAX_EXIT_CANDIDATES = 8;
 const MAX_AUTO_ROUTE_CANDIDATES = 4;
-const MAX_AUTO_BOARD_CANDIDATES = 4;
+const MAX_AUTO_BOARD_CANDIDATES = 8;
 const MAX_AUTO_EXIT_CANDIDATES = 4;
 const MAX_AUTO_DEPARTURES_PER_STOP = 5;
 const MAX_TRANSFER_FIRST_ROUTES = 14;
 const MAX_TRANSFER_SECOND_ROUTES = 8;
 const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 2;
-const MAX_TRANSFER_PLANS = 96;
+const MAX_TRANSFER_PLANS = 40;
 const MAX_TRANSFER_WALK_METERS = 550;
 const PREFERRED_AUTO_OPTION_WALK_METERS = 1609.344;
 const MAX_AUTO_OPTION_WALK_METERS = 2414.016;
@@ -38,6 +38,7 @@ const FIXED_ROUTE_SEARCH_DAYS_AHEAD = 1;
 const MIN_TRANSFER_MS = 3 * 60 * 1000;
 const MAX_DIRECT_WALK_CORRECTION_METERS = 1300;
 const MAX_OSRM_DIRECT_RATIO = 1.7;
+const PLANNING_WARM_ROUTE_IDS = ["2", "3", "4", "11", "23", "24", "26", "30", "31", "33"];
 
 const destinations = {
   william: {
@@ -713,16 +714,8 @@ function walkFallback(from, to, error = "") {
   };
 }
 
-function directWalkingEstimate(from, to, source = "direct-distance walking estimate") {
-  const directMeters = haversineMeters(from, to);
-  const distance = directMeters * 1.25;
-  return {
-    distanceMeters: distance,
-    durationSeconds: distance / WALK_SPEED_MPS,
-    geometry: [[from.lng, from.lat], [to.lng, to.lat]],
-    source,
-    sourceOk: true
-  };
+function isUsableWalkingRoute(route) {
+  return Boolean(route) && route.sourceOk !== false;
 }
 
 async function walkingRoute(from, to) {
@@ -747,7 +740,14 @@ async function walkingRoute(from, to) {
         && directMeters <= MAX_DIRECT_WALK_CORRECTION_METERS
         && Number(route.distance) > directEstimate * MAX_OSRM_DIRECT_RATIO
       ) {
-        return directWalkingEstimate(from, to, "direct-distance walking estimate; OSRM path overlong");
+        const walkingSeconds = Math.max(route.duration, route.distance / WALK_SPEED_MPS);
+        return {
+          distanceMeters: route.distance,
+          durationSeconds: walkingSeconds,
+          geometry: route.geometry?.coordinates || [[from.lng, from.lat], [to.lng, to.lat]],
+          source: "OSRM routed path; longer than direct distance",
+          sourceOk: true
+        };
       }
       const walkingSeconds = Math.max(route.duration, route.distance / WALK_SPEED_MPS);
       return {
@@ -1150,6 +1150,31 @@ function planLeg(plan, index) {
   };
 }
 
+async function attachSelectedPrediction(plan, nowMs) {
+  if (!plan) return;
+  const firstLeg = Array.isArray(plan.legs) && plan.legs.length ? plan.legs[0] : null;
+  const route = firstLeg?.route || plan.route;
+  const boardingStop = firstLeg?.boardingStop || plan.boardingStop;
+  const scheduledBusArrivalMs = Number(firstLeg?.timings?.scheduledBusArrivalMs || plan.timings?.scheduledBusArrivalMs);
+  if (!route || !boardingStop || !Number.isFinite(scheduledBusArrivalMs)) return;
+  const prediction = await stopPredictions(boardingStop, route.headsign, nowMs, scheduledBusArrivalMs, route.lineId);
+  if (!prediction) return;
+  const previousBusArrivalMs = Number(plan.timings.busArrivalMs || scheduledBusArrivalMs);
+  const predictionDeltaMs = Number(prediction.predictedMs) - previousBusArrivalMs;
+  plan.prediction = prediction;
+  plan.timings.busArrivalMs = prediction.predictedMs;
+  plan.timings.standByMs = prediction.predictedMs - STOP_BUFFER_MS;
+  plan.timings.leaveByMs = plan.timings.standByMs - Number(plan.walking?.toBoard?.durationSeconds || 0) * 1000;
+  if (Number.isFinite(predictionDeltaMs) && predictionDeltaMs !== 0) {
+    if (Number.isFinite(Number(plan.timings.exitArrivalMs))) plan.timings.exitArrivalMs += predictionDeltaMs;
+    if (Number.isFinite(Number(plan.timings.destinationArrivalMs))) plan.timings.destinationArrivalMs += predictionDeltaMs;
+    if (Number.isFinite(Number(plan.timings.pullCordAtMs))) plan.timings.pullCordAtMs += predictionDeltaMs;
+  }
+  if (firstLeg) {
+    firstLeg.timings.busArrivalMs = prediction.predictedMs;
+  }
+}
+
 function transferStopPairs(firstRoute, secondRoute) {
   const pairs = [];
   for (const fromStop of firstRoute.stops || []) {
@@ -1309,11 +1334,12 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
         nowMs,
         candidate.firstRoute.routeId,
         transferPoint(candidate.fromStop),
-        { allowTransfers: false, skipLive: true, boardLimit: 3, exitLimit: 2, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
+        { allowTransfers: false, skipLive: true, skipPredictions: true, boardLimit: 8, exitLimit: 2, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
       );
       const firstPlan = firstResult.plan;
       if (!firstPlan || firstPlan.status === "miss") continue;
       const transferWalk = await walkingRoute(firstPlan.exitStop, candidate.toStop);
+      if (!isUsableWalkingRoute(transferWalk)) continue;
       if (transferWalk.distanceMeters > MAX_TRANSFER_WALK_METERS) continue;
       const minimumTransferMs = Number(transferWalk.distanceMeters || 0) > 25 ? MIN_TRANSFER_MS : 0;
       const transferReadyMs = predictedExitMs(firstPlan)
@@ -1325,7 +1351,7 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
         transferReadyMs,
         candidate.secondRoute.routeId,
         destination,
-        { allowTransfers: false, skipLive: true, boardLimit: 2, exitLimit: 3, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
+        { allowTransfers: false, skipLive: true, skipPredictions: true, boardLimit: 2, exitLimit: 3, departureLimit: 4, searchDaysAhead: AUTO_SEARCH_DAYS_AHEAD }
       );
       const secondPlan = secondResult.plan;
       if (!secondPlan || secondPlan.status === "miss") continue;
@@ -1417,6 +1443,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
     for (const boardCandidate of candidateStops) {
       const boardStop = boardCandidate.stop;
       const walkToBoard = await walkingRoute(origin, boardStop);
+      if (!isUsableWalkingRoute(walkToBoard)) continue;
       const walkSeconds = walkToBoard.durationSeconds;
       const departures = [];
       for (const serviceDate of departureDates) {
@@ -1456,7 +1483,8 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
           if (!exitTime || Number(exitTime.sequence) <= boardSequence) continue;
           const exitArrivalMs = timeStringToMs(departure.serviceDate, exitTime.time);
           const walkFromExit = await walkingRoute(exitStop, destination);
-          const prediction = departure.serviceDate === today
+          if (!isUsableWalkingRoute(walkFromExit)) continue;
+          const prediction = !options.skipPredictions && departure.serviceDate === today
             ? await stopPredictions(boardStop, trip.headsign, nowMs, boardArrivalMs, route.lineId)
             : null;
           const busArrivalMs = prediction?.predictedMs || boardArrivalMs;
@@ -1555,6 +1583,13 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   const plan = planIndex >= 0 ? choices[planIndex] : null;
 
   if (plan) {
+    if (!options.skipPredictions && !plan.prediction) {
+      try {
+        await attachSelectedPrediction(plan, nowMs);
+      } catch {
+        // Predictions improve the selected trip but should not hide a scheduled plan.
+      }
+    }
     const liveRoute = Array.isArray(plan.legs) && plan.legs.length ? plan.legs[0].route : plan.route;
     sources.push(sourceStatus(`Ride Guide route ${plan.route.id} schedule`, true));
     if (!options.skipLive) {
@@ -1820,4 +1855,11 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, () => {
   console.log(`AO Labs bus tracker running at http://localhost:${port}`);
+  mapLimit(PLANNING_WARM_ROUTE_IDS, 2, async (routeId) => {
+    try {
+      await getRouteData(routeId);
+    } catch {
+      // Route warmup is best-effort; live requests still fetch on demand.
+    }
+  }).catch(() => {});
 });
