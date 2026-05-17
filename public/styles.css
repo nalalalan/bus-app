@@ -468,6 +468,24 @@ h1 {
   line-height: 1.08;
 }
 
+.trip-step strong {
+  font-size: .92rem;
+}
+
+.trip-nav {
+  margin-top: 2px;
+}
+
+.trip-nav-row {
+  min-height: 34px;
+  border-color: #171717;
+  background: #fbfbf8;
+}
+
+.trip-nav-row strong {
+  font-size: .84rem;
+}
+
 .destination-panel {
   padding-top: 10px;
   padding-bottom: 10px;

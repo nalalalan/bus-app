@@ -461,73 +461,135 @@ function normalizePlanArrivals(planData, location) {
 }
 
 function routeSequenceText(routeIds = []) {
-  return routeIds.map((routeId) => `Route ${routeId}`).join(" + ");
+  return routeIds.map((routeId) => String(routeId).replace(/^Route\s+/i, "")).join(" + ");
 }
 
 function choiceTitle(choice) {
   const routeIds = choice.summary?.routeIds || (choice.route?.id ? String(choice.route.id).split(" + ") : []);
-  const busText = choice.summary?.busCount > 1 ? `${choice.summary.busCount} buses` : "1 bus";
-  return `${routeSequenceText(routeIds)} - ${busText}`;
-}
-
-function choiceDetail(choice) {
-  const walk = formatDistance(choice.summary?.totalWalkingMeters ?? choice.walking?.totalMeters);
-  const arrival = formatMinuteTime(choice.summary?.destinationArrivalMs);
-  const transfer = choice.summary?.transferCount ? `${choice.summary.transferCount} transfer` : "no transfer";
-  const walkLegs = choice.summary?.transferCount
-    ? [
-        choice.walking?.toBoard?.distanceMeters ? `${formatDistance(choice.walking.toBoard.distanceMeters)} to bus` : "",
-        choice.walking?.transfer?.distanceMeters ? `${formatDistance(choice.walking.transfer.distanceMeters)} transfer` : "",
-        choice.walking?.fromExit?.distanceMeters ? `${formatDistance(choice.walking.fromExit.distanceMeters)} after bus` : ""
-      ].filter(Boolean).join("; ")
-    : "";
-  return `${walkLegs || `${walk} walk total`}; arrive ${arrival}; ${transfer}`;
+  return `${routeSequenceText(routeIds)} ${formatMinuteTime(choice.summary?.destinationArrivalMs)} arrival`;
 }
 
 function renderTripOptions(planData = selectedPlanData) {
   if (!els.optionList) return;
   const choices = planData?.choices || [];
-  if (!choices.length) {
-    const title = planData?.pending ? "Planning trip" : planData?.error ? "No low-walk options" : selectedLocationId ? "GPS needed" : "No options yet";
-    const detail = planData?.pending ? "WRTA times and walking route" : planData?.error || (selectedLocationId ? "Allow location for route options" : "Select a destination");
-    els.optionList.innerHTML = `<div class="option-row muted"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
+  if (!choices.length || planData?.pending || planData?.error) {
+    els.optionList.innerHTML = "";
     return;
   }
-  els.optionList.innerHTML = choices.slice(0, 6).map((choice) => (
-    `<button class="option-row${Number(choice.index) === Number(selectedChoiceIndex) ? " selected" : ""}" type="button" data-choice="${escapeHtml(choice.index)}">
-      <strong>${escapeHtml(choiceTitle(choice))}</strong>
-      <span>${escapeHtml(choiceDetail(choice))}</span>
+  const current = Number(selectedChoiceIndex) || 0;
+  const previous = choices.slice().reverse().find((choice) => Number(choice.index) < current);
+  const next = choices.find((choice) => Number(choice.index) > current);
+  const buttons = [
+    previous ? { label: "Previous", choice: previous } : null,
+    next ? { label: "Next", choice: next } : null
+  ].filter(Boolean);
+  els.optionList.innerHTML = buttons.map(({ label, choice }) => (
+    `<button class="option-row trip-nav-row" type="button" data-choice="${escapeHtml(choice.index)}">
+      <strong>${escapeHtml(`${label}: ${choiceTitle(choice)}`)}</strong>
     </button>`
   )).join("");
 }
 
-function renderJourneyRows(data, arrival, location) {
+function tripArrivalMs(data, arrival = data?.arrivals?.[0]) {
+  return Number(arrival?.destinationArrivalMs)
+    || Number(data?.plan?.timings?.destinationArrivalMs)
+    || Number(data?.plan?.timings?.exitArrivalMs)
+    || Number(arrival?.predictedMs)
+    || NaN;
+}
+
+function tripTitle(data, location) {
+  const routeText = routeSequenceText(data?.routeIds || (data?.route?.id ? [data.route.id] : []));
+  const arrival = formatMinuteTime(tripArrivalMs(data));
+  return routeText ? `${routeText} ${arrival} arrival` : `${location?.name || "Trip"} ${arrival}`;
+}
+
+function scheduleDetail(predictedMs, scheduledMs) {
+  if (!Number.isFinite(Number(scheduledMs)) || sameMinute(predictedMs, scheduledMs)) return "";
+  return `scheduled ${formatMinuteTime(scheduledMs)}`;
+}
+
+function displayStopName(stopOrName, fallback = "stop") {
+  const rawName = typeof stopOrName === "string" ? stopOrName : stopOrName?.name;
+  return String(rawName || fallback)
+    .replace(/\bSgamore\b/g, "Sagamore")
+    .replace(/\bN\.([A-Z])/g, "N. $1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatTripStepTime(ms, tripDateMs) {
+  const value = Number(ms);
+  if (!Number.isFinite(value)) return "--";
+  const date = new Date(Math.round(value / 60000) * 60000);
+  const tripDate = Number.isFinite(Number(tripDateMs)) ? new Date(Number(tripDateMs)) : null;
+  if (tripDate && dayKeyFormatter.format(date) === dayKeyFormatter.format(tripDate)) {
+    return minuteTimeFormatter.format(date);
+  }
+  return formatMinuteTime(value);
+}
+
+function tripStepRow(timeMs, action, details = [], tripDateMs = NaN) {
+  const detailText = details.filter(Boolean).join("; ");
+  return `<div class="arrival-row trip-step">
+    <strong>${escapeHtml(`${formatTripStepTime(timeMs, tripDateMs)} ${action}`)}</strong>
+    ${detailText ? `<span>${escapeHtml(detailText)}</span>` : ""}
+  </div>`;
+}
+
+function tripLegs(data, arrival) {
+  if (Array.isArray(data?.legs) && data.legs.length) return data.legs;
+  return [{
+    route: data.route,
+    boardingStop: data.boardingStop,
+    exitStop: data.exitStop,
+    timings: {
+      busArrivalMs: arrival?.predictedMs,
+      scheduledBusArrivalMs: arrival?.scheduledMs,
+      exitArrivalMs: data.plan?.timings?.exitArrivalMs,
+      scheduledExitArrivalMs: data.plan?.timings?.scheduledExitArrivalMs || data.plan?.timings?.exitArrivalMs
+    },
+    walking: data.walking
+  }];
+}
+
+function renderTripRows(data, arrival, location) {
   const placeName = location?.name || "destination";
   const rows = [];
-  const destinationText = timePairText(arrival.destinationArrivalMs, arrival.scheduledDestinationArrivalMs, `Arrive ${placeName}`);
-  const totalWalkText = formatDistance(data.plan?.totalWalkingMeters ?? data.walking?.totalMeters);
-  rows.push(`<div class="arrival-row">
-    <strong>${escapeHtml(destinationText)}</strong>
-    <span>${escapeHtml(`${data.legs.length} buses; ${totalWalkText} walk total`)}</span>
-  </div>`);
+  const legs = tripLegs(data, arrival);
+  const tripDateMs = tripArrivalMs(data, arrival);
 
-  data.legs.forEach((leg, index) => {
+  legs.forEach((leg, index) => {
     const routeId = leg.route?.id || "";
-    const boardTime = timePairText(leg.timings?.busArrivalMs, leg.timings?.scheduledBusArrivalMs, `Route ${routeId}`);
     const transfer = data.transfers?.[index];
-    const nextText = transfer
-      ? `get off ${leg.exitStop?.name || "transfer"}; transfer to Route ${data.legs[index + 1]?.route?.id || ""}`
-      : `get off ${leg.exitStop?.name || "exit"}; walk ${formatWalkSeconds(data.walking?.fromExit?.durationSeconds)}`;
-    rows.push(`<div class="arrival-row">
-      <strong>${escapeHtml(boardTime)}</strong>
-      <span>${escapeHtml(`board at ${leg.boardingStop?.name || "stop"}; ${nextText}`)}</span>
-    </div>`);
+    const firstWalk = index === 0 && data.walking?.toBoard?.durationSeconds
+      ? formatWalkSeconds(data.walking.toBoard.durationSeconds)
+      : "";
+    rows.push(tripStepRow(
+      leg.timings?.busArrivalMs,
+      `board ${routeId} at ${displayStopName(leg.boardingStop)}`,
+      [firstWalk, scheduleDetail(leg.timings?.busArrivalMs, leg.timings?.scheduledBusArrivalMs)],
+      tripDateMs
+    ));
+
     if (transfer) {
       const transferWalk = transfer.walking?.durationSeconds ? formatWalkSeconds(transfer.walking.durationSeconds) : "same stop";
-      rows.push(`<div class="arrival-row">
-        <strong>${escapeHtml(`Transfer at ${transfer.toStop?.name || transfer.fromStop?.name || "stop"}`)}</strong>
-        <span>${escapeHtml(transfer.walking?.distanceMeters ? `${transferWalk}; ${formatDistance(transfer.walking.distanceMeters)}` : "same stop")}</span>
-      </div>`);
+      rows.push(tripStepRow(
+        leg.timings?.exitArrivalMs,
+        `transfer at ${displayStopName(transfer.toStop || transfer.fromStop || leg.exitStop)}`,
+        [transfer.walking?.distanceMeters ? `${transferWalk}; ${formatDistance(transfer.walking.distanceMeters)}` : "same stop"],
+        tripDateMs
+      ));
+    } else {
+      rows.push(tripStepRow(
+        leg.timings?.exitArrivalMs,
+        `get off at ${displayStopName(leg.exitStop, "exit stop")}`,
+        [
+          data.walking?.fromExit?.durationSeconds ? `${formatWalkSeconds(data.walking.fromExit.durationSeconds)} to ${placeName}` : "",
+          scheduleDetail(leg.timings?.exitArrivalMs, leg.timings?.scheduledExitArrivalMs)
+        ],
+        tripDateMs
+      ));
     }
   });
   return rows.join("");
@@ -547,19 +609,12 @@ function renderSelectedStop(data = null, context = {}) {
   const location = data.location;
   const arrivalMode = data.mode || "location";
   els.selectedStopName.textContent = arrivalMode === "journey" || arrivalMode === "trip"
-    ? `${routeSequenceText(data.routeIds)} to ${location?.name || "destination"}`
+    ? tripTitle(data, location)
     : stop.name || "Closest stop";
   if (arrivalMode === "journey") {
-    const walkText = data.walking?.toBoard?.durationSeconds ? formatWalkSeconds(data.walking.toBoard.durationSeconds) : "";
-    const transferText = data.transfers?.[0]?.toStop?.name ? `transfer ${data.transfers[0].toStop.name}` : "transfer";
-    const exitText = data.exitStop?.name ? `exit ${data.exitStop.name}` : `destination ${location?.name || ""}`.trim();
-    els.selectedStopDetail.textContent = `${data.legs.length} buses; board ${data.boardingStop?.name || "stop"}${walkText ? `, ${walkText}` : ""}; ${transferText}; ${exitText}`;
+    els.selectedStopDetail.textContent = `${formatDistance(data.plan?.totalWalkingMeters ?? data.walking?.totalMeters)} walk total`;
   } else if (arrivalMode === "trip") {
-    const walkText = data.walking?.toBoard?.durationSeconds ? formatWalkSeconds(data.walking.toBoard.durationSeconds) : "";
-    const distanceText = formatDistance(data.walking?.toBoard?.distanceMeters ?? stop.distanceMeters);
-    const boardText = data.boardingStop?.name ? `board ${data.boardingStop.name}` : "board stop";
-    const exitText = data.exitStop?.name ? `exit ${data.exitStop.name}` : `destination ${location?.name || ""}`.trim();
-    els.selectedStopDetail.textContent = `${boardText}; ${distanceText}${walkText ? `, ${walkText}` : ""}; ${exitText}`;
+    els.selectedStopDetail.textContent = `${formatDistance(data.walking?.toBoard?.distanceMeters ?? stop.distanceMeters)} to stop; ${formatDistance(data.walking?.fromExit?.distanceMeters)} after bus`;
   } else if (context.atSelectedPlace) {
     els.selectedStopDetail.textContent = `At ${location?.name || "selected place"}; nearest stop ${formatDistance(stop.distanceMeters)}`;
   } else if (!context.hasGps) {
@@ -567,8 +622,8 @@ function renderSelectedStop(data = null, context = {}) {
   } else {
     els.selectedStopDetail.textContent = `Location stop for ${location?.name || "location"}; ${formatDistance(stop.distanceMeters)} from place`;
   }
-  els.arrivalList.innerHTML = arrivalMode === "journey" && (data.arrivals || []).length
-    ? renderJourneyRows(data, data.arrivals[0], location)
+  els.arrivalList.innerHTML = (arrivalMode === "journey" || arrivalMode === "trip") && (data.arrivals || []).length
+    ? renderTripRows(data, data.arrivals[0], location)
     : (data.arrivals || []).length
     ? data.arrivals.map((arrival) => {
       const placeName = location?.name || "destination";
@@ -586,7 +641,7 @@ function renderSelectedStop(data = null, context = {}) {
         <span>${escapeHtml(detailParts.join("; "))}</span>
       </div>`;
     }).join("")
-    : `<div class="arrival-row muted"><strong>No WRTA times</strong><span>${escapeHtml(stop.name || "")}</span></div>`;
+    : `<div class="arrival-row muted"><strong>No WRTA times</strong><span>${escapeHtml(displayStopName(stop, ""))}</span></div>`;
   renderTripOptions();
 }
 

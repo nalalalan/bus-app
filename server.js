@@ -1042,15 +1042,19 @@ function totalWalkingMeters(plan) {
 }
 
 function destinationArrivalMs(plan) {
-  return Number(plan?.timings?.destinationArrivalMs || plan?.timings?.exitArrivalMs || Infinity);
+  const explicit = Number(plan?.timings?.destinationArrivalMs);
+  if (Number.isFinite(explicit)) return explicit;
+  const exitArrival = Number(plan?.timings?.exitArrivalMs);
+  if (!Number.isFinite(exitArrival)) return Infinity;
+  const exitWalkSeconds = Number(plan?.walking?.fromExit?.durationSeconds || 0);
+  return exitArrival + Math.max(0, exitWalkSeconds) * 1000;
 }
 
 function compareJourneyPlans(a, b) {
   const walkDelta = totalWalkingMeters(a) - totalWalkingMeters(b);
-  if (Math.abs(walkDelta) > WALK_EQUIVALENT_TOLERANCE_METERS) return walkDelta;
   return destinationArrivalMs(a) - destinationArrivalMs(b)
-    || (a.legs?.length || 1) - (b.legs?.length || 1)
     || walkDelta
+    || (a.legs?.length || 1) - (b.legs?.length || 1)
     || a.score - b.score;
 }
 
@@ -1083,12 +1087,15 @@ function journeyChoices(plans) {
     .slice(0, 6);
 }
 
-function visibleAutoChoices(plans) {
+function visibleAutoChoices(plans, nowMs = Date.now()) {
   const visible = [];
   const seen = new Set();
   const allChoices = journeyChoices(plans);
-  const candidates = allChoices.filter((item) => totalWalkingMeters(item) <= MAX_AUTO_OPTION_WALK_METERS);
-  const fallbackCandidates = allChoices.filter((item) => totalWalkingMeters(item) <= MAX_FALLBACK_OPTION_WALK_METERS);
+  const today = localDateString(nowMs);
+  const sameDayChoices = allChoices.filter((item) => localDateString(destinationArrivalMs(item)) === today);
+  const dayScopedChoices = sameDayChoices.length ? sameDayChoices : allChoices;
+  const candidates = dayScopedChoices.filter((item) => totalWalkingMeters(item) <= MAX_AUTO_OPTION_WALK_METERS);
+  const fallbackCandidates = dayScopedChoices.filter((item) => totalWalkingMeters(item) <= MAX_FALLBACK_OPTION_WALK_METERS);
   const transferFallbackCandidates = fallbackCandidates.filter((item) => item.kind === "transfer");
   const poolBase = candidates.length
     ? candidates
@@ -1146,7 +1153,7 @@ function selectedChoiceIndex(choices, choiceOffset = 0, targetArrivalMs = NaN) {
   if (!choices.length) return -1;
   let base = 0;
   if (Number.isFinite(targetArrivalMs)) {
-    const targetIndex = choices.findIndex((plan) => plan.timings.exitArrivalMs >= targetArrivalMs);
+    const targetIndex = choices.findIndex((plan) => destinationArrivalMs(plan) >= targetArrivalMs);
     base = targetIndex >= 0 ? targetIndex : choices.length - 1;
   }
   return clamp(base + Math.trunc(Number(choiceOffset) || 0), 0, choices.length - 1);
@@ -1646,7 +1653,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
   possiblePlans.sort((a, b) => a.score - b.score);
   allPlans.sort((a, b) => a.score - b.score);
   const unfilteredChoices = routeSelection.auto ? journeyChoices(allPlans) : tripChoices(possiblePlans);
-  const choices = routeSelection.auto ? visibleAutoChoices(allPlans) : unfilteredChoices;
+  const choices = routeSelection.auto ? visibleAutoChoices(allPlans, nowMs) : unfilteredChoices;
   const hiddenHighWalkChoices = routeSelection.auto
     ? unfilteredChoices.filter((plan) => totalWalkingMeters(plan) > MAX_AUTO_OPTION_WALK_METERS)
     : [];
