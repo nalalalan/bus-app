@@ -387,8 +387,8 @@ function renderTripOptions(planData = selectedPlanData) {
   if (!els.optionList) return;
   const choices = planData?.choices || [];
   if (!choices.length) {
-    const title = planData?.error ? "No low-walk options" : "No options yet";
-    const detail = planData?.error || "Select a location";
+    const title = planData?.error ? "No low-walk options" : selectedLocationId ? "GPS needed" : "No options yet";
+    const detail = planData?.error || (selectedLocationId ? "Allow location for route options" : "Select a destination");
     els.optionList.innerHTML = `<div class="option-row muted"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(detail)}</span></div>`;
     return;
   }

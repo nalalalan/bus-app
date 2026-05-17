@@ -152,12 +152,12 @@ The design motivation is neurodivergent fit. The intended rider has self-reporte
 
 \subsection{A stable, location-first map changes the task}
 
-The WRTA tracker is route-first: routes and vehicles are the primary objects. The AO Labs interface is location-first: a selected place reframes the map around the rider's current location, the selected destination, the boarding stop chosen from that current location, any required transfer, the exit stop near the destination, route geometry, and live buses when browser GPS is available (Fig.~\ref{fig:bus_interface}). This changes the task from inspecting the transit network to answering a personal question: which stop, route sequence, and bus time matter for this trip? When direct options require a long walk, the transfer search can surface a two-bus route instead of filling the panel with high-walk single-route alternatives.
+The WRTA tracker is route-first: routes and vehicles are the primary objects. The AO Labs interface is location-first: a selected place reframes the map around the rider's current location, the selected destination, the boarding stop chosen from that current location, any required transfer, the exit stop near the destination, route geometry, and live buses when browser GPS is available (Fig.~\ref{fig:bus_interface}). After destination selection, the selected trip becomes the first right-panel object and the destination chooser collapses to compact controls below it. This changes the task from inspecting the transit network to answering a personal question: which stop, route sequence, and bus time matter for this trip? When direct options require a long walk, the transfer search can surface a two-bus route instead of filling the panel with high-walk single-route alternatives.
 
 \begin{figure}[H]
     \centering
     \includegraphics[width=0.96\textwidth]{bus-interface.png}
-    \caption{Stable live interface for selected WRTA destinations. The public app keeps saved destinations, route geometry, bus-stop symbols, live-bus state, and current-location state on one map while the side panel keeps selected-trip state in the same view. In this capture, simulated browser geolocation near WPI with Blackstone Theaters selected surfaces a Route 26 to Route 4 transfer through Central Hub. The app suppresses high-walk Route 4-only alternatives and separates the bus-at-stop times from the derived destination-arrival estimate.}
+    \caption{Stable live interface for selected WRTA destinations. The public app keeps saved destinations, route geometry, bus-stop symbols, live-bus state, and current-location state on one map while the side panel keeps selected-trip state at the top of the same view. In this capture, simulated browser geolocation near WPI with Blackstone Theaters selected surfaces a Route 26 to Route 4 transfer through Central Hub. Compact destination controls remain below the selected trip, so the rider can change the destination without displacing the stop, route, transfer, and destination-arrival details.}
     \label{fig:bus_interface}
 \end{figure}
 
@@ -229,7 +229,7 @@ where \(T_{\mathrm{board1}}\) is the WRTA-derived first boarding-stop time, \(D_
 
 \subsection{Visual verification}
 
-The screenshot in Figure~\ref{fig:bus_interface} was generated from the local app at desktop width using simulated browser geolocation near WPI with Blackstone Theaters selected. This verifies that the public interaction model has the expected ingredients for a transfer state: current-location marker, selected destination, live-bus layer, selected-trip panel, route sequence, transfer stop, and suppression of long-walk single-route options.
+The screenshot in Figure~\ref{fig:bus_interface} was generated from the local app at desktop width using simulated browser geolocation near WPI with Blackstone Theaters selected. This verifies that the public interaction model has the expected ingredients for a transfer state: current-location marker, selected destination, live-bus layer, selected-trip panel placed above destination controls, route sequence, transfer stop, and suppression of long-walk single-route options.
 
 \section{Acknowledgements}
 

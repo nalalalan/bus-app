@@ -15,7 +15,7 @@
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="https://aolabs.io/suite-header.css?v=20260516-suite-bloom">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-    <link rel="stylesheet" href="/styles.css?v=20260516-paper-strip3">
+    <link rel="stylesheet" href="/styles.css?v=20260516-trip-priority1">
   </head>
   <body>
     <header class="suite-topbar" aria-label="bus navigation">
@@ -57,16 +57,16 @@
       </section>
 
       <aside class="side-panel" aria-label="Tracker state">
-        <section class="panel-section">
-          <p class="eyebrow">Locations</p>
-          <div id="locationList" class="location-list"></div>
-        </section>
-
         <section class="panel-section selected-panel">
           <p class="eyebrow">Selected trip</p>
           <strong id="selectedStopName">Select a location</strong>
           <span id="selectedStopDetail">--</span>
           <div id="arrivalList" class="arrival-list"></div>
+        </section>
+
+        <section class="panel-section destination-panel">
+          <p class="eyebrow">Destination</p>
+          <div id="locationList" class="location-list"></div>
         </section>
 
         <section class="panel-section">
