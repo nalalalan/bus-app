@@ -81,6 +81,7 @@ const locationMarkers = new Map();
 const BUS_POLL_MS = 10000;
 const BUS_RENDER_MS = 1000;
 const BUS_ESTIMATE_MAX_MS = 45000;
+const PLAN_REFRESH_MS = 3000;
 const EARTH_RADIUS_METERS = 6371000;
 const timeFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York",
@@ -111,6 +112,7 @@ const datedMinuteTimeFormatter = new Intl.DateTimeFormat("en-US", {
 let map;
 let refreshTimer;
 let renderTimer;
+let planRefreshTimer;
 let currentLocation = null;
 let currentMarker = null;
 let selectedLocationId = null;
@@ -127,6 +129,8 @@ let gpsRequestPromise = null;
 let gpsPermissionStatus = null;
 let locationWatchId = null;
 let selectedLocationRequestId = 0;
+let selectedPlanRefreshRequestId = 0;
+let selectedPlanRefreshRunning = false;
 let locateMapButton = null;
 let resetMapButton = null;
 let planPrefetchRunning = false;
@@ -411,6 +415,7 @@ function normalizePlanArrivals(planData, location) {
   const lastLeg = isJourney ? plan.legs[plan.legs.length - 1] : null;
   const scheduledBusMs = Number((firstLeg?.timings?.scheduledBusArrivalMs) ?? plan.timings?.scheduledBusArrivalMs);
   const predictedBusMs = Number((firstLeg?.timings?.busArrivalMs) ?? plan.timings?.busArrivalMs ?? scheduledBusMs);
+  const hasPrediction = Boolean(plan.prediction || plan.predictions?.length || plan.legs?.some((leg) => leg.prediction));
   const scheduleDelayMs = Number.isFinite(predictedBusMs) && Number.isFinite(scheduledBusMs)
     ? predictedBusMs - scheduledBusMs
     : 0;
@@ -449,13 +454,15 @@ function normalizePlanArrivals(planData, location) {
       predictedMs: predictedBusMs,
       scheduledDestinationArrivalMs,
       destinationArrivalMs,
+      hasPrediction,
+      predictionCheckedAt: plan.prediction?.checkedAt || plan.predictions?.[0]?.checkedAt || "",
       walkToStopSeconds: plan.walking?.toBoard?.durationSeconds,
       walkToStopMeters: plan.walking?.toBoard?.distanceMeters,
       transferWalkSeconds: plan.walking?.transfer?.durationSeconds,
       transferWalkMeters: plan.walking?.transfer?.distanceMeters,
       walkFromStopSeconds: plan.walking?.fromExit?.durationSeconds,
       walkFromStopMeters: plan.walking?.fromExit?.distanceMeters,
-      source: plan.prediction?.source || "WRTA schedule"
+      source: hasPrediction ? "WRTA live prediction" : "WRTA schedule"
     }]
   };
 }
@@ -466,21 +473,20 @@ function routeSequenceText(routeIds = []) {
 
 function choiceTitle(choice) {
   const routeIds = choice.summary?.routeIds || (choice.route?.id ? String(choice.route.id).split(" + ") : []);
-  return `${routeSequenceText(routeIds)} ${formatMinuteTime(choice.summary?.destinationArrivalMs)} arrival`;
+  const basis = choice.summary?.hasPrediction ? "predicted" : "scheduled";
+  return `${routeSequenceText(routeIds)} ${formatMinuteTime(choice.summary?.destinationArrivalMs)} ${basis} arrival`;
 }
 
 function renderTripOptions(planData = selectedPlanData) {
   if (!els.optionList) return;
-  const choices = planData?.choices || [];
+  const choices = (planData?.choices || []).filter((choice) => choice.status !== "miss");
   if (!choices.length || planData?.pending || planData?.error) {
     els.optionList.innerHTML = "";
     return;
   }
   const current = Number(selectedChoiceIndex) || 0;
-  const previous = choices.slice().reverse().find((choice) => Number(choice.index) < current);
   const next = choices.find((choice) => Number(choice.index) > current);
   const buttons = [
-    previous ? { label: "Previous", choice: previous } : null,
     next ? { label: "Next", choice: next } : null
   ].filter(Boolean);
   els.optionList.innerHTML = buttons.map(({ label, choice }) => (
@@ -501,12 +507,26 @@ function tripArrivalMs(data, arrival = data?.arrivals?.[0]) {
 function tripTitle(data, location) {
   const routeText = routeSequenceText(data?.routeIds || (data?.route?.id ? [data.route.id] : []));
   const arrival = formatMinuteTime(tripArrivalMs(data));
-  return routeText ? `${routeText} ${arrival} arrival` : `${location?.name || "Trip"} ${arrival}`;
+  const basis = hasLivePrediction(data) ? "predicted" : "scheduled";
+  return routeText ? `${routeText} ${arrival} ${basis} arrival` : `${location?.name || "Trip"} ${arrival}`;
 }
 
-function scheduleDetail(predictedMs, scheduledMs) {
-  if (!Number.isFinite(Number(scheduledMs)) || sameMinute(predictedMs, scheduledMs)) return "";
-  return `scheduled ${formatMinuteTime(scheduledMs)}`;
+function hasLivePrediction(data) {
+  return Boolean(data?.plan?.prediction || data?.plan?.predictions?.length || data?.legs?.some((leg) => leg.prediction) || data?.arrivals?.some((arrival) => arrival.hasPrediction));
+}
+
+function predictionDetail(predictedMs, scheduledMs, hasPrediction = false, label = "") {
+  const scheduledTime = Number.isFinite(Number(scheduledMs)) ? formatMinuteTime(scheduledMs) : "";
+  if (hasPrediction) {
+    return scheduledTime ? `${label || "WRTA predicted"}; scheduled ${scheduledTime}` : (label || "WRTA predicted");
+  }
+  return scheduledTime ? `scheduled ${scheduledTime}` : "scheduled";
+}
+
+function predictionUpdatedText(data) {
+  const checkedAt = data?.plan?.prediction?.checkedAt || data?.plan?.predictions?.[0]?.checkedAt || data?.arrivals?.find((arrival) => arrival.predictionCheckedAt)?.predictionCheckedAt || "";
+  if (!checkedAt) return "";
+  return `updated ${timeFormatter.format(new Date(checkedAt))}`;
 }
 
 function displayStopName(stopOrName, fallback = "stop") {
@@ -549,7 +569,8 @@ function tripLegs(data, arrival) {
       exitArrivalMs: data.plan?.timings?.exitArrivalMs,
       scheduledExitArrivalMs: data.plan?.timings?.scheduledExitArrivalMs || data.plan?.timings?.exitArrivalMs
     },
-    walking: data.walking
+    walking: data.walking,
+    prediction: data.plan?.prediction || null
   }];
 }
 
@@ -568,7 +589,7 @@ function renderTripRows(data, arrival, location) {
     rows.push(tripStepRow(
       leg.timings?.busArrivalMs,
       `board ${routeId} at ${displayStopName(leg.boardingStop)}`,
-      [firstWalk, scheduleDetail(leg.timings?.busArrivalMs, leg.timings?.scheduledBusArrivalMs)],
+      [firstWalk, predictionDetail(leg.timings?.busArrivalMs, leg.timings?.scheduledBusArrivalMs, Boolean(leg.prediction))],
       tripDateMs
     ));
 
@@ -577,7 +598,10 @@ function renderTripRows(data, arrival, location) {
       rows.push(tripStepRow(
         leg.timings?.exitArrivalMs,
         `transfer at ${displayStopName(transfer.toStop || transfer.fromStop || leg.exitStop)}`,
-        [transfer.walking?.distanceMeters ? `${transferWalk}; ${formatDistance(transfer.walking.distanceMeters)}` : "same stop"],
+        [
+          transfer.walking?.distanceMeters ? `${transferWalk}; ${formatDistance(transfer.walking.distanceMeters)}` : "same stop",
+          leg.prediction ? "estimated from predicted bus" : predictionDetail(leg.timings?.exitArrivalMs, leg.timings?.scheduledExitArrivalMs, false)
+        ],
         tripDateMs
       ));
     } else {
@@ -586,7 +610,7 @@ function renderTripRows(data, arrival, location) {
         `get off at ${displayStopName(leg.exitStop, "exit stop")}`,
         [
           data.walking?.fromExit?.durationSeconds ? `${formatWalkSeconds(data.walking.fromExit.durationSeconds)} to ${placeName}` : "",
-          scheduleDetail(leg.timings?.exitArrivalMs, leg.timings?.scheduledExitArrivalMs)
+          leg.prediction ? "estimated from predicted bus" : predictionDetail(leg.timings?.exitArrivalMs, leg.timings?.scheduledExitArrivalMs, false)
         ],
         tripDateMs
       ));
@@ -608,13 +632,23 @@ function renderSelectedStop(data = null, context = {}) {
   const route = data.route;
   const location = data.location;
   const arrivalMode = data.mode || "location";
+  const primaryArrival = data.arrivals?.[0] || null;
+  const predictionState = (arrivalMode === "journey" || arrivalMode === "trip")
+    ? [
+        hasLivePrediction(data) ? "WRTA predicted" : "scheduled",
+        Number.isFinite(Number(primaryArrival?.scheduledDestinationArrivalMs))
+          ? `scheduled arrival ${formatMinuteTime(primaryArrival.scheduledDestinationArrivalMs)}`
+          : "",
+        predictionUpdatedText(data)
+      ].filter(Boolean).join("; ")
+    : "";
   els.selectedStopName.textContent = arrivalMode === "journey" || arrivalMode === "trip"
     ? tripTitle(data, location)
     : stop.name || "Closest stop";
   if (arrivalMode === "journey") {
-    els.selectedStopDetail.textContent = `${formatDistance(data.plan?.totalWalkingMeters ?? data.walking?.totalMeters)} walk total`;
+    els.selectedStopDetail.textContent = `${formatDistance(data.plan?.totalWalkingMeters ?? data.walking?.totalMeters)} walk total${predictionState ? `; ${predictionState}` : ""}`;
   } else if (arrivalMode === "trip") {
-    els.selectedStopDetail.textContent = `${formatDistance(data.walking?.toBoard?.distanceMeters ?? stop.distanceMeters)} to stop; ${formatDistance(data.walking?.fromExit?.distanceMeters)} after bus`;
+    els.selectedStopDetail.textContent = `${formatDistance(data.walking?.toBoard?.distanceMeters ?? stop.distanceMeters)} to stop; ${formatDistance(data.walking?.fromExit?.distanceMeters)} after bus${predictionState ? `; ${predictionState}` : ""}`;
   } else if (context.atSelectedPlace) {
     els.selectedStopDetail.textContent = `At ${location?.name || "selected place"}; nearest stop ${formatDistance(stop.distanceMeters)}`;
   } else if (!context.hasGps) {
@@ -1053,6 +1087,40 @@ function refreshSelectedLocationView() {
   drawSelectedData(selectedArrivalData, { preserveView: true });
 }
 
+async function refreshSelectedPlanData() {
+  if (selectedPlanRefreshRunning || !selectedLocationId || !hasGpsLocation()) return;
+  const location = LOCATIONS.find((item) => item.id === selectedLocationId);
+  if (!location) return;
+  const requestId = ++selectedPlanRefreshRequestId;
+  selectedPlanRefreshRunning = true;
+  try {
+    const planData = await api(planRequestPath(location, selectedChoiceIndex));
+    if (requestId !== selectedPlanRefreshRequestId || selectedLocationId !== location.id) return;
+    const data = normalizePlanArrivals(planData, location);
+    if (!data) return;
+    await ensurePlanRoutesLoaded(data);
+    if (requestId !== selectedPlanRefreshRequestId || selectedLocationId !== location.id) return;
+    selectedPlanData = planData;
+    selectedChoiceIndex = planData.selectedChoiceIndex || 0;
+    selectedArrivalData = data;
+    selectedRouteId = data.routeIds?.[0] || data.route?.id || "";
+    updateRouteStyles();
+    const context = {
+      hasGps: hasGpsLocation(),
+      atSelectedPlace: isAtSelectedPlace(location)
+    };
+    renderSelectedStop(data, context);
+    drawSelectedData(data, { preserveView: true });
+    if (!followVehicleKey) {
+      setStatus(`${location.name} - ${data.routeIds?.length ? routeSequenceText(data.routeIds) : `Route ${selectedRouteId || "--"}`}`);
+    }
+  } catch {
+    if (selectedArrivalData) setStatus("WRTA prediction stale");
+  } finally {
+    selectedPlanRefreshRunning = false;
+  }
+}
+
 function startLocationWatch() {
   if (!navigator.geolocation) {
     setGpsStatus("GPS unavailable");
@@ -1061,7 +1129,7 @@ function startLocationWatch() {
   if (locationWatchId !== null) return;
   locationWatchId = navigator.geolocation.watchPosition((position) => {
     setCurrentLocationFromPosition(position);
-    refreshSelectedLocationView();
+    refreshSelectedPlanData();
   }, (error) => {
     setGpsStatus(gpsErrorText(error));
   }, {
@@ -1416,6 +1484,7 @@ async function selectLocation(locationId, choiceIndex = 0) {
   const location = LOCATIONS.find((item) => item.id === locationId);
   if (!location) return;
   const requestId = ++selectedLocationRequestId;
+  selectedPlanRefreshRequestId += 1;
   followVehicleKey = "";
   selectedArrivalData = null;
   selectedPlanData = null;
@@ -1613,11 +1682,13 @@ async function boot() {
   await refreshLive();
   refreshTimer = setInterval(refreshLive, BUS_POLL_MS);
   renderTimer = setInterval(renderBuses, BUS_RENDER_MS);
+  planRefreshTimer = setInterval(refreshSelectedPlanData, PLAN_REFRESH_MS);
 }
 
 window.addEventListener("beforeunload", () => {
   clearInterval(refreshTimer);
   clearInterval(renderTimer);
+  clearInterval(planRefreshTimer);
   if (locationWatchId !== null && navigator.geolocation?.clearWatch) {
     navigator.geolocation.clearWatch(locationWatchId);
   }

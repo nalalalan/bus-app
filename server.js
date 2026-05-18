@@ -718,22 +718,27 @@ async function getLiveVehicles(routeId = DEFAULT_ROUTE_ID, lineId = null) {
     const data = await swiv("/topo/vehicules", {}, 1000);
     const vehicles = (data?.vehicule || [])
       .filter((vehicle) => Number(vehicle.conduite?.idLigne) === Number(line.lineId))
-      .map((vehicle) => ({
-        id: String(vehicle.id),
-        equipment: String(vehicle.numeroEquipement || vehicle.id || ""),
-        type: vehicle.type || "Bus",
-        lat: vehicle.localisation?.lat,
-        lng: vehicle.localisation?.lng,
-        bearing: vehicle.localisation?.cap ?? null,
-        speedMph: Number(vehicle.conduite?.vitesse || 0),
-        destination: vehicle.conduite?.destination || "",
-        delay: vehicle.conduite?.avanceRetard || "",
-        nextStop: vehicle.conduite?.arretSuiv?.nomCommercial || "",
-        nextStopMinutes: vehicle.conduite?.arretSuiv?.estimationTemps ?? null,
-        load: vehicle.vehiculeLoad || "",
-        displayable: Boolean(vehicle.estAffichable),
-        receivedAt: checkedAt
-      }));
+      .map((vehicle) => {
+        const speedKph = Number(vehicle.conduite?.vitesse || 0);
+        return {
+          id: String(vehicle.id),
+          equipment: String(vehicle.numeroEquipement || vehicle.id || ""),
+          type: vehicle.type || "Bus",
+          lat: vehicle.localisation?.lat,
+          lng: vehicle.localisation?.lng,
+          bearing: vehicle.localisation?.cap ?? null,
+          speedKph,
+          speedMph: Number.isFinite(speedKph) ? speedKph * 0.621371 : 0,
+          speedSource: "WRTA SWIV vitesse",
+          destination: vehicle.conduite?.destination || "",
+          delay: vehicle.conduite?.avanceRetard || "",
+          nextStop: vehicle.conduite?.arretSuiv?.nomCommercial || "",
+          nextStopMinutes: vehicle.conduite?.arretSuiv?.estimationTemps ?? null,
+          load: vehicle.vehiculeLoad || "",
+          displayable: Boolean(vehicle.estAffichable),
+          receivedAt: checkedAt
+        };
+      });
     return {
       vehicles,
       status: sourceStatus("WRTA live vehicles", true, { count: vehicles.length })
@@ -819,7 +824,7 @@ function matchVehicle(vehicles, headsign) {
 async function stopPredictions(stop, headsign, nowMs, plannedArrivalMs, lineId) {
   if (!stop?.swivId) return null;
   try {
-    const data = await swiv(`/horaires/pta/${stop.swivId}`, {}, 10 * 1000);
+    const data = await swiv(`/horaires/pta/${stop.swivId}`, {}, 1000);
     const line = (data?.listeHoraires || []).find((item) => Number(item.idLigne) === Number(lineId));
     if (!line) return null;
     const destinationsForLine = line.destination || [];
@@ -834,14 +839,15 @@ async function stopPredictions(stop, headsign, nowMs, plannedArrivalMs, lineId) 
       raw: item
     }));
     if (!rows.length) return null;
-    rows.sort((a, b) => Math.abs((a.applicableMs || a.scheduledMs) - plannedArrivalMs) - Math.abs((b.applicableMs || b.scheduledMs) - plannedArrivalMs));
+    rows.sort((a, b) => Math.abs(a.scheduledMs - plannedArrivalMs) - Math.abs(b.scheduledMs - plannedArrivalMs));
     const best = rows[0];
-    if (Math.abs((best.applicableMs || best.scheduledMs) - plannedArrivalMs) > 25 * 60 * 1000) return null;
+    if (Math.abs(best.scheduledMs - plannedArrivalMs) > 25 * 60 * 1000) return null;
     return {
       destination: destination?.libelle || "",
       scheduledMs: best.scheduledMs,
       predictedMs: best.applicableMs,
-      source: "WRTA stop prediction"
+      source: "WRTA stop prediction",
+      checkedAt: new Date(nowMs).toISOString()
     };
   } catch {
     return null;
@@ -860,7 +866,7 @@ async function stopArrivals(stop, routeEntries, nowMs = Date.now()) {
   if (!stop?.swivId) return [];
   const byLineId = new Map(routeEntries.map((entry) => [Number(entry.route.lineId), entry.route]));
   try {
-    const data = await swiv(`/horaires/pta/${stop.swivId}`, {}, 10 * 1000);
+    const data = await swiv(`/horaires/pta/${stop.swivId}`, {}, 1000);
     const today = localDateString(nowMs);
     const rows = [];
     for (const line of data?.listeHoraires || []) {
@@ -944,11 +950,11 @@ async function closestTrackedStop(point, routeIds = TRACKED_ROUTE_IDS, nowMs = D
 
 function planState(nowMs, leaveByMs, standByMs, busArrivalMs, walkSeconds) {
   const arrivalIfLeavingNow = nowMs + walkSeconds * 1000;
-  if (nowMs >= standByMs && nowMs <= busArrivalMs + BOARD_GRACE_MS) return "wait";
+  if (arrivalIfLeavingNow > busArrivalMs + BOARD_GRACE_MS) return "miss";
   if (nowMs <= leaveByMs) return "on_time";
   if (arrivalIfLeavingNow <= busArrivalMs - BOARD_GRACE_MS) return "walk_faster";
-  if (arrivalIfLeavingNow > busArrivalMs - BOARD_GRACE_MS) return "miss";
-  return "on_time";
+  if (nowMs >= standByMs && arrivalIfLeavingNow <= busArrivalMs + BOARD_GRACE_MS) return "wait";
+  return "miss";
 }
 
 function scorePlan({ walkToBoard, walkFromExit, busArrivalMs, nowMs, status, exitStop, destination }) {
@@ -1014,7 +1020,9 @@ function choiceSummary(plan, index) {
       transferCount: Math.max(0, (Array.isArray(plan.legs) ? plan.legs.length : 1) - 1),
       totalWalkingMeters: totalWalkingMeters(plan),
       destinationArrivalMs,
-      scheduledDestinationArrivalMs: plan.timings.scheduledDestinationArrivalMs || destinationArrivalMs
+      scheduledDestinationArrivalMs: plan.timings.scheduledDestinationArrivalMs || destinationArrivalMs,
+      hasPrediction: Boolean(plan.prediction || plan.predictions?.length || plan.legs?.some((leg) => leg.prediction)),
+      predictionCheckedAt: plan.prediction?.checkedAt || plan.predictions?.[0]?.checkedAt || ""
     },
     status: plan.status
   };
@@ -1159,9 +1167,23 @@ function selectedChoiceIndex(choices, choiceOffset = 0, targetArrivalMs = NaN) {
   return clamp(base + Math.trunc(Number(choiceOffset) || 0), 0, choices.length - 1);
 }
 
+function missesPredictedTransfer(plan) {
+  if (!Array.isArray(plan?.legs) || plan.legs.length < 2) return false;
+  const firstLeg = plan.legs[0];
+  const secondLeg = plan.legs[1];
+  const transfer = plan.transfers?.[0];
+  const transferWalkSeconds = Number(transfer?.walking?.durationSeconds || 0);
+  const minimumTransferMs = Number(transfer?.walking?.distanceMeters || 0) > 25 ? MIN_TRANSFER_MS : 0;
+  const readyMs = Number(firstLeg?.timings?.exitArrivalMs || 0) + Math.round(transferWalkSeconds * 1000) + minimumTransferMs;
+  const nextBusMs = Number(secondLeg?.timings?.busArrivalMs || 0);
+  return Number.isFinite(readyMs) && Number.isFinite(nextBusMs) && readyMs > nextBusMs;
+}
+
 function predictedExitMs(plan) {
+  const explicitExitMs = Number(plan?.timings?.exitArrivalMs);
+  if (Number.isFinite(explicitExitMs)) return explicitExitMs;
   const delayMs = Number(plan?.timings?.busArrivalMs || 0) - Number(plan?.timings?.scheduledBusArrivalMs || 0);
-  return Number(plan?.timings?.exitArrivalMs || 0) + (Number.isFinite(delayMs) ? delayMs : 0);
+  return Number(plan?.timings?.scheduledExitArrivalMs || 0) + (Number.isFinite(delayMs) ? delayMs : 0);
 }
 
 function routeLabel(routeIds) {
@@ -1210,28 +1232,82 @@ function planLeg(plan, index) {
   };
 }
 
+function applyStopPredictionToTiming(timingOwner, prediction) {
+  if (!timingOwner?.timings || !prediction) return 0;
+  const candidateScheduledBusMs = Number(timingOwner.timings.scheduledBusArrivalMs);
+  const scheduledExitMs = Number(timingOwner.timings.scheduledExitArrivalMs ?? timingOwner.timings.exitArrivalMs);
+  const predictionDeltaMs = Number(prediction.predictedMs) - Number(prediction.scheduledMs);
+  const candidateDeltaMs = Number(prediction.predictedMs) - candidateScheduledBusMs;
+  const routeDurationMs = scheduledExitMs - candidateScheduledBusMs;
+  timingOwner.prediction = prediction;
+  timingOwner.predictionCandidateDeltaMs = Number.isFinite(candidateDeltaMs) ? candidateDeltaMs : 0;
+  timingOwner.timings.scheduledBusArrivalMs = prediction.scheduledMs;
+  timingOwner.timings.busArrivalMs = prediction.predictedMs;
+  if (Number.isFinite(scheduledExitMs) && Number.isFinite(routeDurationMs) && routeDurationMs >= 0) {
+    timingOwner.timings.scheduledExitArrivalMs = scheduledExitMs;
+    timingOwner.timings.exitArrivalMs = Number(prediction.predictedMs) + routeDurationMs;
+  } else if (Number.isFinite(scheduledExitMs) && Number.isFinite(predictionDeltaMs)) {
+    timingOwner.timings.scheduledExitArrivalMs = scheduledExitMs;
+    timingOwner.timings.exitArrivalMs = scheduledExitMs + predictionDeltaMs;
+  }
+  return timingOwner.predictionCandidateDeltaMs;
+}
+
+async function predictionForTripTiming(timingOwner, nowMs) {
+  const route = timingOwner?.route;
+  const boardingStop = timingOwner?.boardingStop;
+  const scheduledBusArrivalMs = Number(timingOwner?.timings?.scheduledBusArrivalMs);
+  if (!route || !boardingStop || !Number.isFinite(scheduledBusArrivalMs)) return null;
+  return stopPredictions(boardingStop, route.headsign, nowMs, scheduledBusArrivalMs, route.lineId);
+}
+
 async function attachSelectedPrediction(plan, nowMs) {
   if (!plan) return;
-  const firstLeg = Array.isArray(plan.legs) && plan.legs.length ? plan.legs[0] : null;
-  const route = firstLeg?.route || plan.route;
-  const boardingStop = firstLeg?.boardingStop || plan.boardingStop;
-  const scheduledBusArrivalMs = Number(firstLeg?.timings?.scheduledBusArrivalMs || plan.timings?.scheduledBusArrivalMs);
-  if (!route || !boardingStop || !Number.isFinite(scheduledBusArrivalMs)) return;
-  const prediction = await stopPredictions(boardingStop, route.headsign, nowMs, scheduledBusArrivalMs, route.lineId);
-  if (!prediction) return;
-  const previousBusArrivalMs = Number(plan.timings.busArrivalMs || scheduledBusArrivalMs);
-  const predictionDeltaMs = Number(prediction.predictedMs) - previousBusArrivalMs;
-  plan.prediction = prediction;
-  plan.timings.busArrivalMs = prediction.predictedMs;
-  plan.timings.standByMs = prediction.predictedMs - STOP_BUFFER_MS;
-  plan.timings.leaveByMs = plan.timings.standByMs - Number(plan.walking?.toBoard?.durationSeconds || 0) * 1000;
-  if (Number.isFinite(predictionDeltaMs) && predictionDeltaMs !== 0) {
-    if (Number.isFinite(Number(plan.timings.exitArrivalMs))) plan.timings.exitArrivalMs += predictionDeltaMs;
-    if (Number.isFinite(Number(plan.timings.destinationArrivalMs))) plan.timings.destinationArrivalMs += predictionDeltaMs;
-    if (Number.isFinite(Number(plan.timings.pullCordAtMs))) plan.timings.pullCordAtMs += predictionDeltaMs;
+  const legs = Array.isArray(plan.legs) && plan.legs.length ? plan.legs : [plan];
+  const appliedPredictions = [];
+  for (const leg of legs) {
+    const prediction = await predictionForTripTiming(leg, nowMs);
+    if (!prediction) continue;
+    applyStopPredictionToTiming(leg, prediction);
+    appliedPredictions.push({ routeId: leg.route?.id || "", ...prediction });
   }
-  if (firstLeg) {
-    firstLeg.timings.busArrivalMs = prediction.predictedMs;
+  if (!appliedPredictions.length) return;
+
+  const firstLeg = legs[0];
+  const lastLeg = legs[legs.length - 1];
+  const firstPrediction = appliedPredictions[0];
+  plan.prediction = firstPrediction;
+  plan.predictions = appliedPredictions;
+  plan.timings.busArrivalMs = firstLeg.timings.busArrivalMs;
+  plan.timings.scheduledBusArrivalMs = firstLeg.timings.scheduledBusArrivalMs;
+  plan.timings.standByMs = firstLeg.timings.busArrivalMs - STOP_BUFFER_MS;
+  plan.timings.leaveByMs = plan.timings.standByMs - Number(plan.walking?.toBoard?.durationSeconds || 0) * 1000;
+  plan.status = planState(
+    nowMs,
+    plan.timings.leaveByMs,
+    plan.timings.standByMs,
+    plan.timings.busArrivalMs,
+    Number(plan.walking?.toBoard?.durationSeconds || 0)
+  );
+  if (legs.length > 1) {
+    const secondLeg = legs[1];
+    plan.timings.secondBusArrivalMs = secondLeg.timings.busArrivalMs;
+    plan.timings.scheduledSecondBusArrivalMs = secondLeg.timings.scheduledBusArrivalMs;
+  }
+  if (legs.length > 1 && plan.transfers?.[0]) {
+    const transferWalkSeconds = Number(plan.transfers[0].walking?.durationSeconds || 0);
+    const minimumTransferMs = Number(plan.transfers[0].walking?.distanceMeters || 0) > 25 ? MIN_TRANSFER_MS : 0;
+    plan.timings.transferReadyMs = firstLeg.timings.exitArrivalMs + Math.round(transferWalkSeconds * 1000) + minimumTransferMs;
+  }
+  if (missesPredictedTransfer(plan)) plan.status = "miss";
+  const exitWalkMs = Math.round(Number(plan.walking?.fromExit?.durationSeconds || 0) * 1000);
+  plan.timings.exitArrivalMs = lastLeg.timings.exitArrivalMs;
+  plan.timings.scheduledExitArrivalMs = lastLeg.timings.scheduledExitArrivalMs;
+  plan.timings.destinationArrivalMs = lastLeg.timings.exitArrivalMs + exitWalkMs;
+  plan.timings.scheduledDestinationArrivalMs = lastLeg.timings.scheduledExitArrivalMs + exitWalkMs;
+  if (Number.isFinite(Number(plan.timings.pullCordAtMs))) {
+    const lastDeltaMs = Number(lastLeg.predictionCandidateDeltaMs || 0);
+    if (Number.isFinite(lastDeltaMs)) plan.timings.pullCordAtMs += lastDeltaMs;
   }
 }
 
@@ -1568,6 +1644,15 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
             ? await stopPredictions(boardStop, trip.headsign, nowMs, boardArrivalMs, route.lineId)
             : null;
           const busArrivalMs = prediction?.predictedMs || boardArrivalMs;
+          const scheduledBusArrivalMs = prediction?.scheduledMs || boardArrivalMs;
+          const predictionDeltaMs = prediction
+            ? Number(prediction.predictedMs) - Number(prediction.scheduledMs)
+            : 0;
+          const candidatePredictionDeltaMs = busArrivalMs - boardArrivalMs;
+          const routeDurationMs = exitArrivalMs - boardArrivalMs;
+          const predictedExitArrivalMs = prediction && Number.isFinite(routeDurationMs) && routeDurationMs >= 0
+            ? busArrivalMs + routeDurationMs
+            : exitArrivalMs + (Number.isFinite(predictionDeltaMs) ? predictionDeltaMs : 0);
           const standByMs = busArrivalMs - STOP_BUFFER_MS;
           const leaveByMs = standByMs - walkSeconds * 1000;
           const status = planState(nowMs, leaveByMs, standByMs, busArrivalMs, walkSeconds);
@@ -1617,9 +1702,12 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
               leaveByMs,
               standByMs,
               busArrivalMs,
-              scheduledBusArrivalMs: boardArrivalMs,
-              exitArrivalMs,
-              pullCordAtMs,
+              scheduledBusArrivalMs,
+              exitArrivalMs: predictedExitArrivalMs,
+              scheduledExitArrivalMs: exitArrivalMs,
+              destinationArrivalMs: predictedExitArrivalMs + Math.round(Number(walkFromExit.durationSeconds || 0) * 1000),
+              scheduledDestinationArrivalMs: exitArrivalMs + Math.round(Number(walkFromExit.durationSeconds || 0) * 1000),
+              pullCordAtMs: pullCordAtMs + (Number.isFinite(candidatePredictionDeltaMs) ? candidatePredictionDeltaMs : 0),
               serviceDate: departure.serviceDate
             },
             walking: {
@@ -1664,19 +1752,28 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
       hiddenHighWalkOptions: hiddenHighWalkChoices.length
     }));
   }
-  const planIndex = selectedChoiceIndex(choices, options.choiceOffset, options.targetArrivalMs);
-  const plan = planIndex >= 0 ? choices[planIndex] : null;
+  let planIndex = selectedChoiceIndex(choices, options.choiceOffset, options.targetArrivalMs);
+  let plan = planIndex >= 0 ? choices[planIndex] : null;
 
   if (plan) {
-    const planServiceDate = plan.timings?.serviceDate || "";
-    if (!options.skipPredictions && !plan.prediction && planServiceDate === today) {
-      try {
-        await attachSelectedPrediction(plan, nowMs);
-      } catch {
-        // Predictions improve the selected trip but should not hide a scheduled plan.
+    for (let attempt = 0; attempt < choices.length && plan; attempt += 1) {
+      const planServiceDate = plan.timings?.serviceDate || "";
+      if (!options.skipPredictions && !plan.prediction && planServiceDate === today) {
+        try {
+          await attachSelectedPrediction(plan, nowMs);
+        } catch {
+          // Predictions improve the selected trip but should not hide a scheduled plan.
+        }
       }
+      if (plan.status !== "miss" && !missesPredictedTransfer(plan)) break;
+      plan.status = "miss";
+      const nextIndex = choices.findIndex((candidate, index) => index > planIndex && candidate.status !== "miss");
+      if (nextIndex < 0) break;
+      planIndex = nextIndex;
+      plan = choices[planIndex];
     }
     const liveRoute = Array.isArray(plan.legs) && plan.legs.length ? plan.legs[0].route : plan.route;
+    const planServiceDate = plan.timings?.serviceDate || "";
     sources.push(sourceStatus(`Ride Guide route ${plan.route.id} schedule`, true));
     if (!options.skipLive && planServiceDate === today) {
       const live = await getLiveVehicles(liveRoute.id, liveRoute.lineId);
