@@ -529,6 +529,26 @@ function predictionUpdatedText(data) {
   return `updated ${timeFormatter.format(new Date(checkedAt))}`;
 }
 
+function primaryBoardLeg(data, arrival = data?.arrivals?.[0]) {
+  const legs = tripLegs(data, arrival);
+  return legs[0] || null;
+}
+
+function stopTimeDetail(data, arrival = data?.arrivals?.[0]) {
+  const leg = primaryBoardLeg(data, arrival);
+  if (!leg) return "";
+  const stopName = displayStopName(leg.boardingStop, "boarding stop");
+  const predicted = formatMinuteTime(leg.timings?.busArrivalMs);
+  const scheduled = formatMinuteTime(leg.timings?.scheduledBusArrivalMs);
+  const updated = predictionUpdatedText(data);
+  return [
+    `Boarding stop ${stopName}`,
+    `bus at stop predicted ${predicted}`,
+    `scheduled ${scheduled}`,
+    updated
+  ].filter(Boolean).join("; ");
+}
+
 function displayStopName(stopOrName, fallback = "stop") {
   const rawName = typeof stopOrName === "string" ? stopOrName : stopOrName?.name;
   return String(rawName || fallback)
@@ -554,6 +574,27 @@ function tripStepRow(timeMs, action, details = [], tripDateMs = NaN) {
   return `<div class="arrival-row trip-step">
     <strong>${escapeHtml(`${formatTripStepTime(timeMs, tripDateMs)} ${action}`)}</strong>
     ${detailText ? `<span>${escapeHtml(detailText)}</span>` : ""}
+  </div>`;
+}
+
+function stopTimeCell(label, value, className = "") {
+  return `<div class="stop-time-cell ${escapeHtml(className)}">
+    <span>${escapeHtml(label)}</span>
+    <strong>${escapeHtml(value || "--")}</strong>
+  </div>`;
+}
+
+function boardingStepRow(leg, details = [], tripDateMs = NaN) {
+  const routeId = leg.route?.id || "";
+  const stopName = displayStopName(leg.boardingStop);
+  const detailText = details.filter(Boolean).join("; ");
+  return `<div class="arrival-row trip-step stop-time-row">
+    <strong>${escapeHtml(`${formatTripStepTime(leg.timings?.busArrivalMs, tripDateMs)} board ${routeId} at ${stopName}`)}</strong>
+    ${detailText ? `<span>${escapeHtml(detailText)}</span>` : ""}
+    <div class="stop-time-grid">
+      ${stopTimeCell("Predicted at stop", formatTripStepTime(leg.timings?.busArrivalMs, tripDateMs))}
+      ${stopTimeCell("Scheduled at stop", formatTripStepTime(leg.timings?.scheduledBusArrivalMs, tripDateMs))}
+    </div>
   </div>`;
 }
 
@@ -586,10 +627,9 @@ function renderTripRows(data, arrival, location) {
     const firstWalk = index === 0 && data.walking?.toBoard?.durationSeconds
       ? formatWalkSeconds(data.walking.toBoard.durationSeconds)
       : "";
-    rows.push(tripStepRow(
-      leg.timings?.busArrivalMs,
-      `board ${routeId} at ${displayStopName(leg.boardingStop)}`,
-      [firstWalk, predictionDetail(leg.timings?.busArrivalMs, leg.timings?.scheduledBusArrivalMs, Boolean(leg.prediction))],
+    rows.push(boardingStepRow(
+      leg,
+      [firstWalk, leg.prediction ? "WRTA predicted stop time" : "scheduled stop time"],
       tripDateMs
     ));
 
@@ -633,15 +673,7 @@ function renderSelectedStop(data = null, context = {}) {
   const location = data.location;
   const arrivalMode = data.mode || "location";
   const primaryArrival = data.arrivals?.[0] || null;
-  const predictionState = (arrivalMode === "journey" || arrivalMode === "trip")
-    ? [
-        hasLivePrediction(data) ? "WRTA predicted" : "scheduled",
-        Number.isFinite(Number(primaryArrival?.scheduledDestinationArrivalMs))
-          ? `scheduled arrival ${formatMinuteTime(primaryArrival.scheduledDestinationArrivalMs)}`
-          : "",
-        predictionUpdatedText(data)
-      ].filter(Boolean).join("; ")
-    : "";
+  const predictionState = (arrivalMode === "journey" || arrivalMode === "trip") ? stopTimeDetail(data, primaryArrival) : "";
   els.selectedStopName.textContent = arrivalMode === "journey" || arrivalMode === "trip"
     ? tripTitle(data, location)
     : stop.name || "Closest stop";
@@ -661,7 +693,7 @@ function renderSelectedStop(data = null, context = {}) {
     : (data.arrivals || []).length
     ? data.arrivals.map((arrival) => {
       const placeName = location?.name || "destination";
-      const busText = timePairText(arrival.predictedMs, arrival.scheduledMs, "Bus predicted");
+      const busText = timePairText(arrival.predictedMs, arrival.scheduledMs, "Bus at stop predicted");
       const destinationText = arrival.destinationArrivalMs
         ? timePairText(arrival.destinationArrivalMs, arrival.scheduledDestinationArrivalMs, `Arrive ${placeName}`)
         : "";

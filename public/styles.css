@@ -472,6 +472,42 @@ h1 {
   font-size: .92rem;
 }
 
+.stop-time-row {
+  gap: 7px;
+}
+
+.stop-time-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--line);
+}
+
+.stop-time-cell {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  padding: 6px 7px;
+  background: #ffffff;
+}
+
+.stop-time-cell span {
+  color: var(--muted);
+  font-size: .66rem;
+  line-height: 1.1;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.stop-time-cell strong {
+  margin-top: 3px;
+  font-size: .86rem;
+  line-height: 1.12;
+}
+
 .trip-nav {
   margin-top: 2px;
 }
@@ -786,4 +822,5 @@ h1 {
     height: 55vh;
     min-height: 360px;
   }
+
 }
