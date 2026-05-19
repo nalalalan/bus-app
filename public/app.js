@@ -537,7 +537,7 @@ function primaryBoardLeg(data, arrival = data?.arrivals?.[0]) {
 function stopTimeDetail(data, arrival = data?.arrivals?.[0]) {
   const leg = primaryBoardLeg(data, arrival);
   if (!leg) return "";
-  const stopName = displayStopName(leg.boardingStop, "boarding stop");
+  const stopName = displayStopLabel(leg.boardingStop, "boarding stop");
   const predicted = formatMinuteTime(leg.timings?.busArrivalMs);
   const scheduled = formatMinuteTime(leg.timings?.scheduledBusArrivalMs);
   const updated = predictionUpdatedText(data);
@@ -556,6 +556,12 @@ function displayStopName(stopOrName, fallback = "stop") {
     .replace(/\bN\.([A-Z])/g, "N. $1")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function displayStopLabel(stopOrName, fallback = "stop") {
+  const name = displayStopName(stopOrName, fallback);
+  const code = typeof stopOrName === "string" ? "" : String(stopOrName?.code || "").trim();
+  return code ? `${name} (Stop ${code})` : name;
 }
 
 function formatTripStepTime(ms, tripDateMs) {
@@ -586,7 +592,7 @@ function stopTimeCell(label, value, className = "") {
 
 function boardingStepRow(leg, details = [], tripDateMs = NaN) {
   const routeId = leg.route?.id || "";
-  const stopName = displayStopName(leg.boardingStop);
+  const stopName = displayStopLabel(leg.boardingStop);
   const detailText = details.filter(Boolean).join("; ");
   return `<div class="arrival-row trip-step stop-time-row">
     <strong>${escapeHtml(`${formatTripStepTime(leg.timings?.busArrivalMs, tripDateMs)} board ${routeId} at ${stopName}`)}</strong>
@@ -637,7 +643,7 @@ function renderTripRows(data, arrival, location) {
       const transferWalk = transfer.walking?.durationSeconds ? formatWalkSeconds(transfer.walking.durationSeconds) : "same stop";
       rows.push(tripStepRow(
         leg.timings?.exitArrivalMs,
-        `transfer at ${displayStopName(transfer.toStop || transfer.fromStop || leg.exitStop)}`,
+        `transfer at ${displayStopLabel(transfer.toStop || transfer.fromStop || leg.exitStop)}`,
         [
           transfer.walking?.distanceMeters ? `${transferWalk}; ${formatDistance(transfer.walking.distanceMeters)}` : "same stop",
           leg.prediction ? "estimated from predicted bus" : predictionDetail(leg.timings?.exitArrivalMs, leg.timings?.scheduledExitArrivalMs, false)
@@ -647,7 +653,7 @@ function renderTripRows(data, arrival, location) {
     } else {
       rows.push(tripStepRow(
         leg.timings?.exitArrivalMs,
-        `get off at ${displayStopName(leg.exitStop, "exit stop")}`,
+        `get off at ${displayStopLabel(leg.exitStop, "exit stop")}`,
         [
           data.walking?.fromExit?.durationSeconds ? `${formatWalkSeconds(data.walking.fromExit.durationSeconds)} to ${placeName}` : "",
           leg.prediction ? "estimated from predicted bus" : predictionDetail(leg.timings?.exitArrivalMs, leg.timings?.scheduledExitArrivalMs, false)
@@ -707,7 +713,7 @@ function renderSelectedStop(data = null, context = {}) {
         <span>${escapeHtml(detailParts.join("; "))}</span>
       </div>`;
     }).join("")
-    : `<div class="arrival-row muted"><strong>No WRTA times</strong><span>${escapeHtml(displayStopName(stop, ""))}</span></div>`;
+    : `<div class="arrival-row muted"><strong>No WRTA times</strong><span>${escapeHtml(displayStopLabel(stop, ""))}</span></div>`;
   renderTripOptions();
 }
 

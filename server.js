@@ -821,6 +821,13 @@ function matchVehicle(vehicles, headsign) {
     || null;
 }
 
+function wrtaStopTimeMs(today, item) {
+  return {
+    predictedMs: secondsAfterMidnightToMs(today, item.horaire),
+    scheduledMs: secondsAfterMidnightToMs(today, item.horaireApplicable ?? item.horaire)
+  };
+}
+
 async function stopPredictions(stop, headsign, nowMs, plannedArrivalMs, lineId) {
   if (!stop?.swivId) return null;
   try {
@@ -829,24 +836,32 @@ async function stopPredictions(stop, headsign, nowMs, plannedArrivalMs, lineId) 
     if (!line) return null;
     const destinationsForLine = line.destination || [];
     const normalizedHeadsign = String(headsign || "").toLowerCase();
-    const destination = destinationsForLine.find((item) => String(item.libelle || "").toLowerCase().includes(normalizedHeadsign))
-      || destinationsForLine[0];
+    const destination = destinationsForLine.find((item) => String(item.libelle || "").toLowerCase().includes(normalizedHeadsign));
+    if (!destination) return null;
     const today = localDateString(nowMs);
-    const rows = (destination?.horaires || []).map((item) => ({
-      id: item.idHoraire,
-      scheduledMs: secondsAfterMidnightToMs(today, item.horaire),
-      applicableMs: secondsAfterMidnightToMs(today, item.horaireApplicable ?? item.horaire),
-      raw: item
-    }));
+    const rows = (destination?.horaires || []).map((item) => {
+      const stopTime = wrtaStopTimeMs(today, item);
+      return {
+        id: item.idHoraire,
+        scheduledMs: stopTime.scheduledMs,
+        predictedMs: stopTime.predictedMs,
+        raw: item
+      };
+    }).filter((row) => row.predictedMs >= nowMs - 2 * 60 * 1000);
     if (!rows.length) return null;
-    rows.sort((a, b) => Math.abs(a.scheduledMs - plannedArrivalMs) - Math.abs(b.scheduledMs - plannedArrivalMs));
-    const best = rows[0];
-    if (Math.abs(best.scheduledMs - plannedArrivalMs) > 25 * 60 * 1000) return null;
+    rows.sort((a, b) => a.predictedMs - b.predictedMs);
+    const closeToPlanned = rows
+      .slice()
+      .sort((a, b) => Math.abs(a.scheduledMs - plannedArrivalMs) - Math.abs(b.scheduledMs - plannedArrivalMs))
+      .find((row) => Math.abs(row.scheduledMs - plannedArrivalMs) <= 6 * 60 * 1000);
+    const best = closeToPlanned
+      || rows.find((row) => row.scheduledMs >= plannedArrivalMs - 2 * 60 * 1000)
+      || rows[0];
     return {
       destination: destination?.libelle || "",
       scheduledMs: best.scheduledMs,
-      predictedMs: best.applicableMs,
-      source: "WRTA stop prediction",
+      predictedMs: best.predictedMs,
+      source: "WRTA stop tracker",
       checkedAt: new Date(nowMs).toISOString()
     };
   } catch {
@@ -874,8 +889,9 @@ async function stopArrivals(stop, routeEntries, nowMs = Date.now()) {
       if (!route) continue;
       for (const destination of line.destination || []) {
         for (const item of destination.horaires || []) {
-          const scheduledMs = secondsAfterMidnightToMs(today, item.horaire);
-          const predictedMs = secondsAfterMidnightToMs(today, item.horaireApplicable ?? item.horaire);
+          const stopTime = wrtaStopTimeMs(today, item);
+          const predictedMs = stopTime.predictedMs;
+          const scheduledMs = stopTime.scheduledMs;
           if (predictedMs < nowMs - 2 * 60 * 1000) continue;
           rows.push({
             id: item.idHoraire,
@@ -957,12 +973,14 @@ function planState(nowMs, leaveByMs, standByMs, busArrivalMs, walkSeconds) {
   return "miss";
 }
 
-function scorePlan({ walkToBoard, walkFromExit, busArrivalMs, nowMs, status, exitStop, destination }) {
+function scorePlan({ walkToBoard, walkFromExit, busArrivalMs, exitArrivalMs, nowMs, status, exitStop, destination }) {
   const waitSeconds = Math.max(0, (busArrivalMs - nowMs) / 1000);
+  const rideSeconds = Math.max(0, (Number(exitArrivalMs) - Number(busArrivalMs)) / 1000);
   const exitDirect = haversineMeters(exitStop, destination);
   const missPenalty = status === "miss" ? 3600 : 0;
   return walkToBoard.durationSeconds * 1.1
     + walkFromExit.durationSeconds * 0.8
+    + rideSeconds * 0.22
     + waitSeconds * 0.28
     + exitDirect * 0.12
     + missPenalty;
@@ -1110,10 +1128,7 @@ function visibleAutoChoices(plans, nowMs = Date.now()) {
     : transferFallbackCandidates.length
       ? transferFallbackCandidates
       : fallbackCandidates;
-  const hasPreferredWalk = poolBase.some((item) => totalWalkingMeters(item) <= PREFERRED_AUTO_OPTION_WALK_METERS);
-  const pool = hasPreferredWalk
-    ? poolBase.filter((item) => totalWalkingMeters(item) <= PREFERRED_AUTO_OPTION_WALK_METERS)
-    : poolBase;
+  const pool = poolBase;
   for (const plan of pool) {
     const routeKey = (plan.routeIds || (plan.route?.id ? [plan.route.id] : [])).join("+");
     const arrivalKey = Math.round(Number(plan.timings?.destinationArrivalMs || plan.timings?.exitArrivalMs || 0) / 60000);
@@ -1718,7 +1733,7 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
             stopWindow,
             stopCount: Math.max(0, Number(exitTime.sequence) - boardSequence),
             prediction,
-            score: scorePlan({ walkToBoard, walkFromExit, busArrivalMs, nowMs, status, exitStop, destination })
+            score: scorePlan({ walkToBoard, walkFromExit, busArrivalMs, exitArrivalMs: predictedExitArrivalMs, nowMs, status, exitStop, destination })
           });
         }
       }
