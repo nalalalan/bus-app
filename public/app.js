@@ -529,6 +529,14 @@ function predictionUpdatedText(data) {
   return `updated ${timeFormatter.format(new Date(checkedAt))}`;
 }
 
+function tripStopTimeMeta(leg, tripDateMs) {
+  const predicted = formatTripStepTime(leg?.timings?.busArrivalMs, tripDateMs);
+  const scheduled = formatTripStepTime(leg?.timings?.scheduledBusArrivalMs, tripDateMs);
+  if (predicted === "--" && scheduled === "--") return "";
+  if (scheduled === "--") return `predicted ${predicted}`;
+  return `predicted ${predicted} / scheduled ${scheduled}`;
+}
+
 function primaryBoardLeg(data, arrival = data?.arrivals?.[0]) {
   const legs = tripLegs(data, arrival);
   return legs[0] || null;
@@ -575,11 +583,15 @@ function formatTripStepTime(ms, tripDateMs) {
   return formatMinuteTime(value);
 }
 
-function tripStepRow(timeMs, action, details = [], tripDateMs = NaN) {
+function tripStepRow(timeMs, action, stopText = "", details = [], tripDateMs = NaN) {
   const detailText = details.filter(Boolean).join("; ");
   return `<div class="arrival-row trip-step">
-    <strong>${escapeHtml(`${formatTripStepTime(timeMs, tripDateMs)} ${action}`)}</strong>
-    ${detailText ? `<span>${escapeHtml(detailText)}</span>` : ""}
+    <time>${escapeHtml(formatTripStepTime(timeMs, tripDateMs))}</time>
+    <div class="trip-step-copy">
+      <strong>${escapeHtml(action)}</strong>
+      ${stopText ? `<span class="trip-step-stop">${escapeHtml(stopText)}</span>` : ""}
+      ${detailText ? `<span class="trip-step-meta">${escapeHtml(detailText)}</span>` : ""}
+    </div>
   </div>`;
 }
 
@@ -593,13 +605,13 @@ function stopTimeCell(label, value, className = "") {
 function boardingStepRow(leg, details = [], tripDateMs = NaN) {
   const routeId = leg.route?.id || "";
   const stopName = displayStopLabel(leg.boardingStop);
-  const detailText = details.filter(Boolean).join("; ");
+  const detailText = [tripStopTimeMeta(leg, tripDateMs), ...details].filter(Boolean).join("; ");
   return `<div class="arrival-row trip-step stop-time-row">
-    <strong>${escapeHtml(`${formatTripStepTime(leg.timings?.busArrivalMs, tripDateMs)} board ${routeId} at ${stopName}`)}</strong>
-    ${detailText ? `<span>${escapeHtml(detailText)}</span>` : ""}
-    <div class="stop-time-grid">
-      ${stopTimeCell("Predicted at stop", formatTripStepTime(leg.timings?.busArrivalMs, tripDateMs))}
-      ${stopTimeCell("Scheduled at stop", formatTripStepTime(leg.timings?.scheduledBusArrivalMs, tripDateMs))}
+    <time>${escapeHtml(formatTripStepTime(leg.timings?.busArrivalMs, tripDateMs))}</time>
+    <div class="trip-step-copy">
+      <strong>${escapeHtml(`Board ${routeId}`)}</strong>
+      <span class="trip-step-stop">${escapeHtml(stopName)}</span>
+      ${detailText ? `<span class="trip-step-meta">${escapeHtml(detailText)}</span>` : ""}
     </div>
   </div>`;
 }
@@ -635,7 +647,7 @@ function renderTripRows(data, arrival, location) {
       : "";
     rows.push(boardingStepRow(
       leg,
-      [firstWalk, leg.prediction ? "WRTA predicted stop time" : "scheduled stop time"],
+      [firstWalk],
       tripDateMs
     ));
 
@@ -643,7 +655,8 @@ function renderTripRows(data, arrival, location) {
       const transferWalk = transfer.walking?.durationSeconds ? formatWalkSeconds(transfer.walking.durationSeconds) : "same stop";
       rows.push(tripStepRow(
         leg.timings?.exitArrivalMs,
-        `transfer at ${displayStopLabel(transfer.toStop || transfer.fromStop || leg.exitStop)}`,
+        "Transfer",
+        displayStopLabel(transfer.toStop || transfer.fromStop || leg.exitStop),
         [
           transfer.walking?.distanceMeters ? `${transferWalk}; ${formatDistance(transfer.walking.distanceMeters)}` : "same stop",
           leg.prediction ? "estimated from predicted bus" : predictionDetail(leg.timings?.exitArrivalMs, leg.timings?.scheduledExitArrivalMs, false)
@@ -653,7 +666,8 @@ function renderTripRows(data, arrival, location) {
     } else {
       rows.push(tripStepRow(
         leg.timings?.exitArrivalMs,
-        `get off at ${displayStopLabel(leg.exitStop, "exit stop")}`,
+        "Get off",
+        displayStopLabel(leg.exitStop, "exit stop"),
         [
           data.walking?.fromExit?.durationSeconds ? `${formatWalkSeconds(data.walking.fromExit.durationSeconds)} to ${placeName}` : "",
           leg.prediction ? "estimated from predicted bus" : predictionDetail(leg.timings?.exitArrivalMs, leg.timings?.scheduledExitArrivalMs, false)
@@ -679,14 +693,15 @@ function renderSelectedStop(data = null, context = {}) {
   const location = data.location;
   const arrivalMode = data.mode || "location";
   const primaryArrival = data.arrivals?.[0] || null;
-  const predictionState = (arrivalMode === "journey" || arrivalMode === "trip") ? stopTimeDetail(data, primaryArrival) : "";
   els.selectedStopName.textContent = arrivalMode === "journey" || arrivalMode === "trip"
     ? tripTitle(data, location)
     : stop.name || "Closest stop";
   if (arrivalMode === "journey") {
-    els.selectedStopDetail.textContent = `${formatDistance(data.plan?.totalWalkingMeters ?? data.walking?.totalMeters)} walk total${predictionState ? `; ${predictionState}` : ""}`;
+    const updated = predictionUpdatedText(data);
+    els.selectedStopDetail.textContent = `${formatDistance(data.plan?.totalWalkingMeters ?? data.walking?.totalMeters)} walk total${updated ? `; ${updated}` : ""}`;
   } else if (arrivalMode === "trip") {
-    els.selectedStopDetail.textContent = `${formatDistance(data.walking?.toBoard?.distanceMeters ?? stop.distanceMeters)} to stop; ${formatDistance(data.walking?.fromExit?.distanceMeters)} after bus${predictionState ? `; ${predictionState}` : ""}`;
+    const updated = predictionUpdatedText(data);
+    els.selectedStopDetail.textContent = `${formatDistance(data.walking?.toBoard?.distanceMeters ?? stop.distanceMeters)} to stop; ${formatDistance(data.walking?.fromExit?.distanceMeters)} after bus${updated ? `; ${updated}` : ""}`;
   } else if (context.atSelectedPlace) {
     els.selectedStopDetail.textContent = `At ${location?.name || "selected place"}; nearest stop ${formatDistance(stop.distanceMeters)}`;
   } else if (!context.hasGps) {

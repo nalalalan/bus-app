@@ -456,7 +456,7 @@ h1 {
 
 .selected-panel {
   display: grid;
-  gap: 7px;
+  gap: 6px;
 }
 
 .selected-panel {
@@ -464,26 +464,66 @@ h1 {
 }
 
 .selected-panel > strong {
-  font-size: 1.12rem;
-  line-height: 1.08;
+  font-size: 1.04rem;
+  line-height: 1.1;
+}
+
+.selected-panel > span {
+  font-size: .78rem;
+  line-height: 1.25;
+}
+
+.arrival-row.trip-step {
+  grid-template-columns: 58px minmax(0, 1fr);
+  align-items: start;
+  min-height: 0;
+  padding: 8px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  gap: 9px;
+}
+
+.trip-step time {
+  color: #171717;
+  font-size: .86rem;
+  font-weight: 900;
+  line-height: 1.12;
+  white-space: nowrap;
+}
+
+.trip-step-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .trip-step strong {
-  font-size: .92rem;
+  font-size: .9rem;
+  line-height: 1.12;
+}
+
+.trip-step .trip-step-stop {
+  color: #171717;
+  font-size: .82rem;
+  line-height: 1.16;
+  font-weight: 800;
+}
+
+.trip-step .trip-step-meta {
+  color: var(--muted);
+  font-size: .74rem;
+  line-height: 1.2;
+  font-weight: 700;
 }
 
 .stop-time-row {
-  gap: 7px;
+  gap: 9px;
 }
 
 .stop-time-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--line);
+  display: none;
 }
 
 .stop-time-cell {
