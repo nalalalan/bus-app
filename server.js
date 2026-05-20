@@ -6,7 +6,7 @@ const port = Number(process.env.PORT || 3000);
 const publicDir = path.join(__dirname, "public");
 
 const DEFAULT_ROUTE_ID = "31";
-const TRACKED_ROUTE_IDS = ["2", "4", "3", "31"];
+const TRACKED_ROUTE_IDS = ["2", "4", "3", "30", "31"];
 const TIME_ZONE = "America/New_York";
 const RIDE_GUIDE_DATASET = "worcester-regional-transit-authority-ma-us";
 const RIDE_GUIDE_CLIENT = "rideguide";
@@ -21,19 +21,21 @@ const BOARD_GRACE_MS = 60 * 1000;
 const MAX_BOARD_CANDIDATES = 10;
 const MAX_DEPARTURES_PER_STOP = 10;
 const MAX_EXIT_CANDIDATES = 8;
-const MAX_AUTO_ROUTE_CANDIDATES = 4;
+const MAX_AUTO_ROUTE_CANDIDATES = 6;
 const MAX_AUTO_BOARD_CANDIDATES = 8;
 const MAX_AUTO_EXIT_CANDIDATES = 4;
 const MAX_AUTO_DEPARTURES_PER_STOP = 5;
 const MAX_TRANSFER_FIRST_ROUTES = 14;
 const MAX_TRANSFER_SECOND_ROUTES = 8;
-const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 2;
-const MAX_TRANSFER_PLANS = 14;
+const MAX_TRANSFER_PAIRS_PER_ROUTE_PAIR = 8;
+const MAX_TRANSFER_PLANS = 42;
 const MAX_TRANSFER_WALK_METERS = 550;
 const PREFERRED_AUTO_OPTION_WALK_METERS = 1609.344;
 const MAX_AUTO_OPTION_WALK_METERS = 2414.016;
 const MAX_FALLBACK_OPTION_WALK_METERS = 5632.704;
 const WALK_EQUIVALENT_TOLERANCE_METERS = 220;
+const LOW_WALK_ARRIVAL_TOLERANCE_MS = 10 * 60 * 1000;
+const SIGNIFICANT_WALK_SAVING_METERS = 450;
 const AUTO_SEARCH_DAYS_AHEAD = 1;
 const FIXED_ROUTE_SEARCH_DAYS_AHEAD = 1;
 const MIN_TRANSFER_MS = 3 * 60 * 1000;
@@ -650,7 +652,7 @@ async function routePreviews(origin, destination, routeIds = null) {
 }
 
 async function autoRoutePreviews(origin, destination) {
-  return routePreviews(origin, destination, TRACKED_ROUTE_IDS);
+  return routePreviews(origin, destination, PLANNING_WARM_ROUTE_IDS);
 }
 
 async function getSwivRouteStopMap(routeId, lineId) {
@@ -1078,7 +1080,14 @@ function destinationArrivalMs(plan) {
 
 function compareJourneyPlans(a, b) {
   const walkDelta = totalWalkingMeters(a) - totalWalkingMeters(b);
-  return destinationArrivalMs(a) - destinationArrivalMs(b)
+  const arrivalDelta = destinationArrivalMs(a) - destinationArrivalMs(b);
+  if (
+    Math.abs(arrivalDelta) <= LOW_WALK_ARRIVAL_TOLERANCE_MS
+    && Math.abs(walkDelta) >= SIGNIFICANT_WALK_SAVING_METERS
+  ) {
+    return walkDelta;
+  }
+  return arrivalDelta
     || walkDelta
     || (a.legs?.length || 1) - (b.legs?.length || 1)
     || a.score - b.score;
@@ -1326,7 +1335,7 @@ async function attachSelectedPrediction(plan, nowMs) {
   }
 }
 
-function transferStopPairs(firstRoute, secondRoute) {
+function transferStopPairs(firstRoute, secondRoute, origin, destination) {
   const pairs = [];
   for (const fromStop of firstRoute.stops || []) {
     if (!Number.isFinite(fromStop.lat) || !Number.isFinite(fromStop.lng)) continue;
@@ -1335,13 +1344,15 @@ function transferStopPairs(firstRoute, secondRoute) {
       const distanceMeters = fromStop.id === toStop.id ? 0 : haversineMeters(fromStop, toStop);
       if (distanceMeters > MAX_TRANSFER_WALK_METERS) continue;
       const hubBonus = /central hub|union station/i.test(`${fromStop.name} ${toStop.name}`) ? -250 : 0;
+      const originPenalty = Number.isFinite(origin?.lat) ? haversineMeters(origin, fromStop) * 0.18 : 0;
+      const destinationPenalty = Number.isFinite(destination?.lat) ? haversineMeters(toStop, destination) * 0.12 : 0;
       pairs.push({
         firstRoute,
         secondRoute,
         fromStop,
         toStop,
         distanceMeters,
-        score: distanceMeters + hubBonus
+        score: distanceMeters + originPenalty + destinationPenalty + hubBonus
       });
     }
   }
@@ -1461,7 +1472,7 @@ async function createTransferPlans(origin, destination, nowMs, sources) {
   for (const firstRoute of routeCandidates.firstRoutes) {
     for (const secondRoute of routeCandidates.secondRoutes) {
       if (!firstRoute || !secondRoute || firstRoute.routeId === secondRoute.routeId) continue;
-      for (const pair of transferStopPairs(firstRoute, secondRoute)) {
+      for (const pair of transferStopPairs(firstRoute, secondRoute, origin, destination)) {
         const firstPreview = routeCandidates.previewByRouteId.get(firstRoute.routeId);
         const secondPreview = routeCandidates.previewByRouteId.get(secondRoute.routeId);
         candidates.push({
