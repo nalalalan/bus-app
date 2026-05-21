@@ -474,7 +474,7 @@ h1 {
 }
 
 .arrival-row.trip-step {
-  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-columns: 74px minmax(0, 1fr);
   align-items: start;
   min-height: 0;
   padding: 8px 0;
@@ -486,6 +486,7 @@ h1 {
 }
 
 .trip-step time {
+  display: block;
   color: #171717;
   font-size: .86rem;
   font-weight: 900;

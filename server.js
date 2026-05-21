@@ -47,7 +47,7 @@ const SHORT_STOP_WALK_MULTIPLIER = 1.45;
 const CANDIDATE_PREDICTION_LIMIT = 28;
 const CANDIDATE_PREDICTION_LOOKBACK_MS = 12 * 60 * 1000;
 const MAX_PREDICTION_SCHEDULE_MATCH_MS = 8 * 60 * 1000;
-const PLANNING_WARM_ROUTE_IDS = ["2", "3", "4", "11", "23", "24", "26", "30", "31", "33"];
+const PLANNING_WARM_ROUTE_IDS = ["2", "3", "4", "11", "23", "24", "26", "30", "31", "33", "825"];
 const PLANNING_WARM_TRIPS = [
   ["wpi", "blackstone"],
   ["wpi", "chipotle"],
@@ -836,12 +836,31 @@ async function walkingRoute(from, to) {
   });
 }
 
+function normalizeTransitLabel(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[.,]/g, " ")
+    .replace(/\bave\b/g, "avenue")
+    .replace(/\bav\b/g, "avenue")
+    .replace(/\bst\b/g, "street")
+    .replace(/\bplz\b/g, "plaza")
+    .replace(/\bctr\b/g, "center")
+    .replace(/\bcon\b/g, "connector")
+    .replace(/\bconn\b/g, "connector")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function transitLabelMatches(value, target) {
+  const normalizedValue = normalizeTransitLabel(value);
+  const normalizedTarget = normalizeTransitLabel(target);
+  return Boolean(normalizedValue && normalizedTarget)
+    && (normalizedValue.includes(normalizedTarget) || normalizedTarget.includes(normalizedValue));
+}
+
 function matchVehicle(vehicles, headsign) {
-  const needle = String(headsign || "").toLowerCase();
-  return vehicles.find((vehicle) => String(vehicle.destination || "").toLowerCase().includes(needle))
-    || vehicles.find((vehicle) => vehicle.displayable)
-    || vehicles[0]
-    || null;
+  return vehicles.find((vehicle) => transitLabelMatches(vehicle.destination, headsign)) || null;
 }
 
 function wrtaStopTimeMs(today, item) {
@@ -858,8 +877,7 @@ async function stopPredictions(stop, headsign, nowMs, plannedArrivalMs, lineId) 
     const line = (data?.listeHoraires || []).find((item) => Number(item.idLigne) === Number(lineId));
     if (!line) return null;
     const destinationsForLine = line.destination || [];
-    const normalizedHeadsign = String(headsign || "").toLowerCase();
-    const destination = destinationsForLine.find((item) => String(item.libelle || "").toLowerCase().includes(normalizedHeadsign));
+    const destination = destinationsForLine.find((item) => transitLabelMatches(item.libelle, headsign));
     if (!destination) return null;
     const today = localDateString(nowMs);
     const rows = (destination?.horaires || []).map((item) => {
@@ -1845,9 +1863,6 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
       if (result.ok && Array.isArray(result.value)) possiblePlans.push(...result.value);
     }
 
-    if (routeSelection.auto && possiblePlans.some((plan) => plan.status !== "miss")) {
-      break;
-    }
   }
 
   const transferPlans = routeSelection.auto && options.allowTransfers !== false

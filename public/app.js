@@ -1,5 +1,5 @@
 const ROUTES = ["2", "4", "3", "30", "31"];
-const PLANNING_ROUTE_IDS = ["11", "23", "24", "26", "27", "30", "33"];
+const PLANNING_ROUTE_IDS = ["11", "23", "24", "26", "27", "30", "33", "825"];
 const LOCATIONS = [
   {
     id: "william",
