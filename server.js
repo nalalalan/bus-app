@@ -994,9 +994,8 @@ function planState(nowMs, leaveByMs, standByMs, busArrivalMs, walkSeconds) {
   const arrivalIfLeavingNow = nowMs + walkSeconds * 1000;
   if (arrivalIfLeavingNow > busArrivalMs + BOARD_GRACE_MS) return "miss";
   if (nowMs <= leaveByMs) return "on_time";
-  if (arrivalIfLeavingNow <= busArrivalMs - BOARD_GRACE_MS) return "walk_faster";
-  if (nowMs >= standByMs && arrivalIfLeavingNow <= busArrivalMs + BOARD_GRACE_MS) return "wait";
-  return "miss";
+  if (walkSeconds <= 75 && nowMs >= standByMs) return "wait";
+  return "walk_faster";
 }
 
 function scorePlan({ walkToBoard, walkFromExit, busArrivalMs, exitArrivalMs, nowMs, status, exitStop, destination }) {
