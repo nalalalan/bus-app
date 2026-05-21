@@ -41,6 +41,12 @@ const FIXED_ROUTE_SEARCH_DAYS_AHEAD = 1;
 const MIN_TRANSFER_MS = 3 * 60 * 1000;
 const MAX_DIRECT_WALK_CORRECTION_METERS = 1300;
 const MAX_OSRM_DIRECT_RATIO = 1.7;
+const SHORT_STOP_WALK_DIRECT_METERS = 280;
+const SHORT_STOP_WALK_OVERROUTE_RATIO = 2.7;
+const SHORT_STOP_WALK_MULTIPLIER = 1.45;
+const CANDIDATE_PREDICTION_LIMIT = 28;
+const CANDIDATE_PREDICTION_LOOKBACK_MS = 12 * 60 * 1000;
+const MAX_PREDICTION_SCHEDULE_MATCH_MS = 8 * 60 * 1000;
 const PLANNING_WARM_ROUTE_IDS = ["2", "3", "4", "11", "23", "24", "26", "30", "31", "33"];
 const PLANNING_WARM_TRIPS = [
   ["wpi", "blackstone"],
@@ -789,6 +795,21 @@ async function walkingRoute(from, to) {
       const directEstimate = directMeters * 1.25;
       if (
         Number.isFinite(directMeters)
+        && directMeters <= SHORT_STOP_WALK_DIRECT_METERS
+        && Number(route.distance) > directMeters * SHORT_STOP_WALK_OVERROUTE_RATIO
+      ) {
+        const correctedDistance = directMeters * SHORT_STOP_WALK_MULTIPLIER;
+        return {
+          distanceMeters: correctedDistance,
+          durationSeconds: correctedDistance / WALK_SPEED_MPS,
+          geometry: [[from.lng, from.lat], [to.lng, to.lat]],
+          source: "short local stop walk estimate; OSRM over-routed",
+          sourceOk: true,
+          osrmDistanceMeters: route.distance
+        };
+      }
+      if (
+        Number.isFinite(directMeters)
         && directMeters <= MAX_DIRECT_WALK_CORRECTION_METERS
         && Number(route.distance) > directEstimate * MAX_OSRM_DIRECT_RATIO
       ) {
@@ -856,9 +877,12 @@ async function stopPredictions(stop, headsign, nowMs, plannedArrivalMs, lineId) 
       .slice()
       .sort((a, b) => Math.abs(a.scheduledMs - plannedArrivalMs) - Math.abs(b.scheduledMs - plannedArrivalMs))
       .find((row) => Math.abs(row.scheduledMs - plannedArrivalMs) <= 6 * 60 * 1000);
-    const best = closeToPlanned
-      || rows.find((row) => row.scheduledMs >= plannedArrivalMs - 2 * 60 * 1000)
-      || rows[0];
+    const nextScheduledMatch = rows.find((row) => (
+      row.scheduledMs >= plannedArrivalMs - 2 * 60 * 1000
+      && row.scheduledMs <= plannedArrivalMs + MAX_PREDICTION_SCHEDULE_MATCH_MS
+    ));
+    const best = closeToPlanned || nextScheduledMatch;
+    if (!best) return null;
     return {
       destination: destination?.libelle || "",
       scheduledMs: best.scheduledMs,
@@ -1333,6 +1357,73 @@ async function attachSelectedPrediction(plan, nowMs) {
     const lastDeltaMs = Number(lastLeg.predictionCandidateDeltaMs || 0);
     if (Number.isFinite(lastDeltaMs)) plan.timings.pullCordAtMs += lastDeltaMs;
   }
+  refreshPlanScore(plan, nowMs);
+}
+
+function refreshPlanScore(plan, nowMs) {
+  if (!plan?.timings || !plan?.walking) return;
+  if (Array.isArray(plan.legs) && plan.legs.length > 1) {
+    const firstLeg = plan.legs[0];
+    const secondLeg = plan.legs[1];
+    const transferReadyMs = Number(plan.timings.transferReadyMs || predictedExitMs(firstLeg));
+    const firstWaitSeconds = Math.max(0, (Number(firstLeg.timings?.busArrivalMs || plan.timings.busArrivalMs) - nowMs) / 1000);
+    const transferWaitSeconds = Math.max(0, (Number(secondLeg.timings?.busArrivalMs || plan.timings.secondBusArrivalMs) - transferReadyMs) / 1000);
+    plan.score = Number(plan.totalWalkingSeconds || 0) * 1.45
+      + firstWaitSeconds * 0.18
+      + transferWaitSeconds * 0.3
+      + Math.max(0, (destinationArrivalMs(plan) - nowMs) / 1000) * 0.015
+      + 480;
+    return;
+  }
+  plan.score = scorePlan({
+    walkToBoard: plan.walking.toBoard,
+    walkFromExit: plan.walking.fromExit,
+    busArrivalMs: plan.timings.busArrivalMs,
+    exitArrivalMs: plan.timings.exitArrivalMs,
+    nowMs,
+    status: plan.status,
+    exitStop: plan.exitStop,
+    destination: plan.destination
+  });
+}
+
+function predictionCandidateKey(plan) {
+  const legs = Array.isArray(plan.legs) && plan.legs.length ? plan.legs : [plan];
+  return legs
+    .map((leg) => [
+      leg.route?.id || "",
+      leg.route?.headsign || "",
+      leg.boardingStop?.id || "",
+      leg.timings?.serviceDate || "",
+      Math.round(Number(leg.timings?.scheduledBusArrivalMs || leg.timings?.busArrivalMs || 0) / 60000)
+    ].join(":"))
+    .join(">");
+}
+
+async function attachCandidatePredictions(plans, nowMs) {
+  const today = localDateString(nowMs);
+  const seen = new Set();
+  const candidates = [];
+  for (const plan of plans) {
+    if (!plan?.timings || plan.timings.serviceDate !== today) continue;
+    const firstScheduledBusMs = Number(plan.timings.scheduledBusArrivalMs || plan.timings.busArrivalMs);
+    if (!Number.isFinite(firstScheduledBusMs)) continue;
+    if (firstScheduledBusMs < nowMs - CANDIDATE_PREDICTION_LOOKBACK_MS) continue;
+    const key = predictionCandidateKey(plan);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push(plan);
+  }
+  candidates.sort((a, b) => {
+    return destinationArrivalMs(a) - destinationArrivalMs(b)
+      || totalWalkingMeters(a) - totalWalkingMeters(b)
+      || (a.legs?.length || 1) - (b.legs?.length || 1)
+      || a.score - b.score;
+  });
+  const selected = candidates.slice(0, CANDIDATE_PREDICTION_LIMIT);
+  await mapLimit(selected, Math.min(4, selected.length), async (plan) => {
+    await attachSelectedPrediction(plan, nowMs);
+  });
 }
 
 function transferStopPairs(firstRoute, secondRoute, origin, destination) {
@@ -1764,6 +1855,9 @@ async function createPlan(origin, destinationId = "chipotle", nowMs = Date.now()
     ? await createTransferPlans(origin, destination, nowMs, sources)
     : [];
   const allPlans = [...possiblePlans, ...transferPlans];
+  if (!options.skipPredictions) {
+    await attachCandidatePredictions(allPlans, nowMs);
+  }
   possiblePlans.sort((a, b) => a.score - b.score);
   allPlans.sort((a, b) => a.score - b.score);
   const unfilteredChoices = routeSelection.auto ? journeyChoices(allPlans) : tripChoices(possiblePlans);
